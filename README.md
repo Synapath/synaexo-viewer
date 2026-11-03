@@ -1,8 +1,8 @@
 # SynaExo Viewer
 
-浏览器本地读取 SynaExo ZIP 录制包的静态页面。支持文件清单、JSON、图片及浏览器可解码的视频；不会上传 ZIP，也不请求清单中指向的远程地址。
+浏览器本地读取 SynaExo ZIP 播放包，显示 SMPL-X 三维人体、EXO／EGO 相机画面和统一时间轴。SMPL-X 在 Web Worker 内按需前向计算，视频通过本地 Blob URL 解码；不需要 Python 服务，不上传 ZIP，也不访问包内记录的远程地址。
 
-NPZ／NPY／ONNX 文件只登记为参数资源。浏览器内 SMPL-X 前向、逐帧同步与三维叠加尚未接入；Python／PyTorch 服务不能在 GitHub Pages 上运行。[ZIP 样包结构](PACKAGE.md)记录打包范围和时间、模型证据，页面按文件读取，不将文件存在视为算法质检通过。
+支持范围与打包要求见 [ZIP 播放包](PACKAGE.md)。三维人体为不透明白色；干净代理视频上的实时人体叠加为半透明白色。已有叠加视频保留原来的颜色，不重复叠加人体。
 
 ## 本地开发
 
@@ -16,7 +16,7 @@ npm run lint
 npm run build
 ```
 
-ZIP 首先读取中央目录，选择文件时才解压。关闭、切换和取消会释放当前引用或中断读取，视频使用本地 Blob URL。单文件预览预算为 1 GiB，JSON 为 8 MiB，清单为 20,000 个文件；超过预算明确报错，不伪装成空包。参数文件不在浏览器中自动执行。ZIP CRC32 只检测包内损坏，不代替来源 manifest 的 SHA-256 回执核验。
+ZIP 首先读取中央目录，随后读取播放所需资源并核对 CRC32、文件大小和清单 SHA-256。关闭、切换和取消会终止计算线程、释放视频 URL 或中断读取。单文件预算为 1 GiB，JSON 为 8 MiB，清单为 20,000 个文件，NPZ 展开预算为 256 MiB；超出范围明确报错。
 
 ## GitHub Pages
 
@@ -29,3 +29,5 @@ ZIP 首先读取中央目录，选择文件时才解压。关闭、切换和取�
 ## 品牌与依赖
 
 X 标志沿用 SynaExo 已确认的 SVG，来源为 [Synapath/synaverse](https://github.com/Synapath/synaverse/blob/master/migration_sources/synaexo/frontend/public/brand/exo-4d-mark.svg)。ZIP 读取采用 [zip.js](https://github.com/gildas-lormeau/zip.js)，采用其按条目读取 API；图标使用 Lucide，页面采用 React 和 Vite。构建时从运行依赖生成 `third-party-licenses.txt`，随静态产物分发。
+
+SMPL-X 前向实现参考 [Synapath/smplx-viewer](https://github.com/Synapath/smplx-viewer)，保留其完整姿态修正和线性混合蒙皮，许可见 `licenses/smplx-viewer-MIT.txt`。模型权重不随网站分发。
