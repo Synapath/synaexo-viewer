@@ -22,6 +22,7 @@ dist-ssr
 *.mov
 .env
 .env.*
+__pycache__/
 
 # Editor directories and files
 .vscode/*

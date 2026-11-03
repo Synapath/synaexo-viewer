@@ -2,10 +2,49 @@
 
 打包器将一条结果整理为本地 ZIP，静态页面通过 `src/lib/archive.ts` 的 `openArchive` 读取。页面读取下列播放约定，在本地按需执行 SMPL-X 前向，并依据逐帧时间证据同步视频。
 
+## 打包脚本
+
+[`tools/package_recording.py`](tools/package_recording.py) 从已发布的 S3 manifest 下载参数、相机证据和已有叠加视频，配合本机提供的对应 SMPL-X 模型生成 ZIP。视频保持原字节，不执行算法或转码，不下载 RRD 和逐帧网格。
+
+打包端需要 Python 3.10+；网页播放仍不需要 Python。先创建环境并安装依赖，在仓库根目录执行：
+
+```sh
+python3 -m venv /tmp/synaexo-package-venv
+/tmp/synaexo-package-venv/bin/python -m pip install -r tools/requirements-package.txt
+```
+
+S3 认证沿用 Boto3 的凭据链，可使用本机 AWS profile，或 `AWS_ACCESS_KEY_ID`、`AWS_SECRET_ACCESS_KEY` 和 `AWS_DEFAULT_REGION` 环境变量；临时凭据同时设置 `AWS_SESSION_TOKEN`。不要把凭据写进脚本或提交到仓库。S3 兼容服务可通过 `--endpoint-url` 和 `--addressing-style` 指定访问方式。
+
+已有本机对象存储配置时，也可使用 `--storage-config /path/to/object-storage.json`。脚本读取其 `profiles[profile]` 中的 `endpoint`、`region`、`access_key`、`secret_key` 及可选的 `session_token`；配置文件和凭据不会写入 ZIP 或报告。显式指定的 `--endpoint-url` 优先于配置文件。
+
+将下面示例中的地址与路径替换为实际值；`--model` 使用该计算结果对应、已获许可的完整模型 NPZ：
+
+```sh
+/tmp/synaexo-package-venv/bin/python tools/package_recording.py --manifest s3://BUCKET/RESULT/manifest.json --model /path/to/SMPLX_NEUTRAL.npz --output /path/to/recording.zip
+```
+
+也可以从结果索引 CSV 选择一条。使用完整录制 ID，重复匹配会报错；实际读取 CSV 的 `S3清单` 列，包括其中指向的显示修订版本：
+
+```sh
+/tmp/synaexo-package-venv/bin/python tools/package_recording.py --csv /path/to/latest.csv --recording-id FULL_RECORDING_ID --model /path/to/SMPLX_NEUTRAL.npz --output /path/to/recording.zip
+```
+
+脚本按参数实际使用的形状和表情维数裁剪模型，保留姿态修正、关节回归、蒙皮与必要的平均手势。包内 `validation/model-trim.json` 记录模型摘要和保留的数组；该记录不代表人体物理精度通过。打包不会改变来源的质检状态。
+
+下载内容按 SHA-256 校验后缓存，默认位置可通过 `--help` 查看，并可用 `--cache-dir` 指定。ZIP 写入临时文件并回读核验 CRC、大小和摘要后才替换输出；已有 ZIP 需要 `--force` 才覆盖。成功后生成同名 `.report.json`，标准输出也只包含这份 JSON 报告，下载进度写入标准错误。
+
+打包测试：
+
+```sh
+/tmp/synaexo-package-venv/bin/python -m unittest discover -s tools -p 'test_*.py'
+```
+
+## 包内结构
+
 ```text
 manifest.json
 motions/subject_01/smplx_parameters.npz
-models/SMPLX_NEUTRAL_B10_E10.npz
+models/smplx.npz
 timeline/
   reference.json
   source_frames/<view_id>.npz
@@ -16,10 +55,7 @@ provenance/
   layer.json
   preprocessing.json
   quality.json
-validation/
-  model-trim-report.json
-  model-trim-validation.json
-  source-parameter-mesh-check.json
+validation/model-trim.json
 ```
 
 原结果中不存在的数据不补默认值。`view_id` 使用 `exo01`、`exo02` 等外部机位名，以及 `ego01` 第一人称机位名；`camera_id` 保留源身份，显示顺序与文件名的对应关系保存在 `calibration/cameras.json`。
