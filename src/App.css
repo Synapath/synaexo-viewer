@@ -178,3 +178,19 @@ main {
   color: var(--muted);
   font-size: 14px;
 }
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 20;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 18px;
+  background: #242424;
+  color: #eee;
+  font-size: 14px;
+}
+.error-banner > span { flex: 1; min-width: 0; }
+.error-banner > button { flex: none; }

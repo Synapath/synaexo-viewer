@@ -90,11 +90,11 @@ class PackagingTests(unittest.TestCase):
         output.write_bytes(b'previous output')
         payload.write_bytes(b'changed after checksum')
         with self.assertRaises(ValueError):
-            pack.write(output, {}, force=True)
+            pack.write(output, force=True)
         self.assertEqual(output.read_bytes(), b'previous output')
         self.assertEqual(list(self.root.glob('*.part')), [])
 
-    def test_complete_package_keeps_evidence_and_model_bases(self):
+    def test_preview_only_contains_motion_and_videos_with_exact_timing_and_masks(self):
         def npz(**arrays):
             out = io.BytesIO()
             np.savez_compressed(out, **arrays)
@@ -138,25 +138,35 @@ class PackagingTests(unittest.TestCase):
         client = MemoryS3({'r/manifest.json': json.dumps(manifest).encode(), **{'r/' + k: v for k, v in data.items()}})
         reader = Receipt(client, 's3://bucket/r/manifest.json', self.root / 'cache')
         args = SimpleNamespace(model=model, output=self.root / 'out.zip', manifest='s3://bucket/r/manifest.json', force=False)
-        report = build(args, reader, 'example', self.root)
+        report = build(args, reader, self.root)
         self.assertFalse(report['physical_accuracy_passed'])
         self.assertEqual(report['cameras'], ['EGO01'])
         with zipfile.ZipFile(args.output) as archive:
-            root = json.loads(archive.read('manifest.json'))
-            timeline = json.loads(archive.read('timeline/reference.json'))
-            self.assertEqual(timeline['reference_epoch_ns'], str(2 ** 60))
-            self.assertEqual(timeline['relative_timestamps_ns'], [0, 33_333_333])
-            self.assertEqual(root['source_layer_version'], 'result-display')
+            self.assertEqual(sorted(archive.namelist()), ['motions/subject_01/smplx_parameters.npz', 'previews/ego01.mp4'])
             self.assertEqual(archive.read('previews/ego01.mp4'), data['cam.mp4'])
-            with np.load(io.BytesIO(archive.read('models/smplx.npz')), allow_pickle=False) as trimmed:
-                self.assertEqual(trimmed['shapedirs'].shape, (10475, 3, 301))
-                self.assertEqual(trimmed['shapedirs'][0, 0, 0], 2)
-                self.assertEqual(trimmed['shapedirs'][0, 0, 1], 0)
-                self.assertEqual(trimmed['shapedirs'][0, 0, 300], 3)
-                self.assertEqual(trimmed['posedirs'][0, 0, 0], 7)
+            with np.load(io.BytesIO(archive.read('motions/subject_01/smplx_parameters.npz')), allow_pickle=False) as params:
+                metadata = json.loads(params['preview_metadata'].item())
+                self.assertEqual(metadata['model']['sha256'], digest(model))
+                self.assertEqual(params['reference_timestamps_ns'].tolist(), times.tolist())
+                self.assertEqual(params['preview_video_pts_ns'].tolist(), [[0, 33_333_333]])
+                self.assertEqual(params['preview_source_observed'].tolist(), [[False, True]])
+                self.assertEqual(params['body_observed'].tolist(), [True, True])
+                self.assertFalse(metadata['physical_accuracy_passed'])
+                for key in motion:
+                    np.testing.assert_array_equal(params[key], motion[key])
+                self.assertNotIn('source_manifest', metadata)
+                self.assertNotIn('calibration', metadata)
+                self.assertEqual(params['betas'][0, 0], 0)
         reads = len(client.reads)
         reader.get('motion.npz')
         self.assertEqual(len(client.reads), reads)
+        previous_hash = report['sha256']
+        args.force = True
+        self.assertEqual(build(args, reader, self.root)['sha256'], previous_hash)
+        layer['body_observed_frames'] = 1
+        reader.json = lambda path: layer if path == 'layer.json' else pre
+        with self.assertRaisesRegex(ValueError, '逐帧人体观测'):
+            build(args, reader, self.root)
 
 
 if __name__ == '__main__':

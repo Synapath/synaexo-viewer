@@ -47,13 +47,13 @@ export function createScene(
     0,
     descriptor.body_observed.findIndex(
       (body, index) =>
-        body && descriptor.cameras.some((camera) => camera.pose_valid[index]),
+        body && descriptor.cameras.some((camera) => camera.pose_valid?.[index] ?? camera.source_observed[index]),
     ),
   );
   const initialView = descriptor.cameras.find(
-    (camera) => camera.pose_valid[initialFrame],
+    (camera) => camera.T_world_from_camera && camera.pose_valid?.[initialFrame],
   );
-  const initialRows = initialView
+  const initialRows = initialView?.T_world_from_camera
     ? typeof initialView.T_world_from_camera[0][0] === "number"
       ? (initialView.T_world_from_camera as number[][])
       : (initialView.T_world_from_camera as number[][][])[initialFrame]
@@ -133,7 +133,7 @@ export function createScene(
       if (config.source_observed[current])
         renderer.render(backgrounds[index - 1], ortho);
       renderer.clearDepth();
-      if (config.baked) return;
+      if (config.baked || !config.T_world_from_camera || !config.K) return;
       const rows =
         typeof config.T_world_from_camera[0][0] === "number"
           ? (config.T_world_from_camera as number[][])
@@ -188,7 +188,7 @@ export function createScene(
       mesh.material = overlayMaterial;
       mesh.visible =
         descriptor.body_observed[current] &&
-        config.pose_valid[current] &&
+        config.pose_valid?.[current] === true &&
         config.source_observed[current];
       axes.visible = false;
       renderer.autoClear = false;

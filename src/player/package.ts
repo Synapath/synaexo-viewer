@@ -1,15 +1,18 @@
 import { sha256 } from "@noble/hashes/sha256";
 import { RecordingArchive, safeEntryPath } from "../lib/archive";
 import { ForwardEngine } from "./engine";
+import { parseNpz } from "../smplx/npy";
+import { readPreview } from "./preview";
+import { cachedModel, sha256Hex } from "./models";
 
 export type Camera = {
   camera_id: string;
   view_id: string;
   kind: "gopro" | "ego";
   image_size: [number, number];
-  K: number[][];
-  T_world_from_camera: number[][] | number[][][];
-  pose_valid: boolean[];
+  K?: number[][];
+  T_world_from_camera?: number[][] | number[][][];
+  pose_valid?: boolean[];
   source_observed: boolean[];
   video_pts_ns: number[];
   url: string;
@@ -86,7 +89,7 @@ function pose(value: unknown, frames: number): number[][] | number[][][] {
     throw new Error("相机世界坐标变换无效");
   return value as number[][] | number[][][];
 }
-export async function prepareRecording(
+async function prepareLegacyRecording(
   archive: RecordingArchive,
   signal: AbortSignal,
   progress: (text: string) => void,
@@ -327,5 +330,51 @@ export async function prepareRecording(
     engine.dispose();
     urls.forEach(URL.revokeObjectURL);
     throw error;
+  }
+}
+
+
+export async function prepareRecording(
+  archive: RecordingArchive, signal: AbortSignal, progress: (text: string) => void,
+  resolveModel = cachedModel,
+): Promise<Recording> {
+  if (archive.assets.some(a => a.path === "manifest.json"))
+    return prepareLegacyRecording(archive, signal, progress);
+  const motions = archive.assets.filter(a => /^motions\/[^/]+\/smplx_parameters\.npz$/.test(a.path));
+  if (motions.length !== 1 || archive.assets.some(a => a.path !== motions[0]?.path && !/^previews\/(exo|ego)\d{2}\.mp4$/.test(a.path)))
+    throw new Error("预览包需包含一个 motions/<subject>/smplx_parameters.npz 和 previews/ 视频");
+  if (motions[0].bytes > 128 * 1024 ** 2) throw new Error("动作参数超过浏览器预算");
+  progress("正在读取动作参数…");
+  const motionBuffer = await (await archive.blob(motions[0].path, signal)).arrayBuffer();
+  const parsed = readPreview(await parseNpz(new Uint8Array(motionBuffer)));
+  if (archive.assets.length !== 1 + parsed.cameras.length) throw new Error("视频清单与预览包文件不一致");
+  progress("正在加载 SMPL-X 模型…");
+  const model = await resolveModel(parsed.modelHash, signal);
+  signal.throwIfAborted();
+  if (sha256Hex(model) !== parsed.modelHash) throw new Error("模型与动作参数的摘要不一致");
+  const engine = new ForwardEngine(), urls: string[] = [];
+  const abort = () => engine.dispose();
+  signal.addEventListener("abort", abort, { once: true });
+  try {
+    const cameras: Camera[] = [];
+    progress("正在校验视频…");
+    for (const video of parsed.cameras) {
+      const asset = archive.assets.find(a => a.path === video.path);
+      if (!asset || asset.bytes !== video.bytes) throw new Error(`视频缺失或大小不符：${video.path}`);
+      const blob = await archive.blob(video.path, signal);
+      if (sha256Hex(await blob.arrayBuffer()) !== video.sha256) throw new Error(`视频校验失败：${video.path}`);
+      signal.throwIfAborted();
+      const url = URL.createObjectURL(blob); urls.push(url);
+      cameras.push({ ...video, url, baked: true });
+    }
+    const initialized = await engine.init(model, motionBuffer, [], parsed.contract);
+    signal.throwIfAborted();
+    signal.removeEventListener("abort", abort);
+    return { frames: parsed.contract.frames, relative_timestamps_ns: parsed.contract.times,
+      world_frame: parsed.contract.worldFrame, body_observed: parsed.body, faces: initialized.faces,
+      cameras, engine, qualityPassed: parsed.qualityPassed,
+      dispose() { engine.dispose(); urls.forEach(URL.revokeObjectURL); archive.close(); } };
+  } catch (error) {
+    signal.removeEventListener("abort", abort); engine.dispose(); urls.forEach(URL.revokeObjectURL); throw error;
   }
 }
