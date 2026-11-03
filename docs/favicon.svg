@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="SynaExo">
+  <title>SynaExo</title>
+  <style>@media(prefers-color-scheme:light){path{fill:#161616}}</style>
+  <g fill="#f1f1f1">
+    <path d="M8 7H16L55 57H47Z"/>
+    <path d="M47 7H55L43 22H35Z"/>
+    <path d="M16 57H8L20 42H28Z"/>
+  </g>
+</svg>
