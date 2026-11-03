@@ -11,7 +11,8 @@ import zipfile
 import numpy as np
 from botocore.response import StreamingBody
 
-from package_recording import Package, Receipt, build, digest, safe_path, select_source, storage_client, timestamps
+from package_recording import (Package, Receipt, build, digest, public_metadata, publish_delivery,
+                              safe_path, select_source, storage_client, timestamps)
 
 
 class MemoryS3:
@@ -93,6 +94,13 @@ class PackagingTests(unittest.TestCase):
             pack.write(output, force=True)
         self.assertEqual(output.read_bytes(), b'previous output')
         self.assertEqual(list(self.root.glob('*.part')), [])
+
+    def test_delivery_rejects_private_metadata(self):
+        for value in [{'aws_secret_access_key': 'private'}, {'path': '/data/internal/file'},
+                      {'url': 'https://example.invalid/signed?token=private'}, {'path': 'C:\\private\\file'}]:
+            with self.assertRaises(ValueError):
+                public_metadata(value)
+        public_metadata({'clock_id': 'qr-planned:clock', 'units': 'm', 'physical_accuracy_passed': False})
 
     def test_visualization_bundles_readme_model_motion_and_videos_with_exact_timing(self):
         def npz(**arrays):
@@ -177,6 +185,26 @@ class PackagingTests(unittest.TestCase):
         previous_hash = report['sha256']
         args.force = True
         self.assertEqual(build(args, reader, self.root)['sha256'], previous_hash)
+
+        # Standard S3 references must preserve the existing visualization arrays and bytes.
+        paths = {p: 'results/result/' + ('motions/humans/person/manifest.json' if p == 'layer.json' else p)
+                 for p in data}
+        standard_layer = {**layer, 'parameters': paths['motion.npz'], 'quality': paths['quality.json'],
+                          'preprocessing': paths['pre.json'],
+                          'projections': [{**layer['projections'][0], 'path': paths['cam.mp4']}]}
+        payloads = {paths[p]: encoded for p, encoded in data.items()}
+        payloads[paths['layer.json']] = json.dumps(standard_layer).encode()
+        import hashlib
+        standard = {'format': 'synaexo_result', 'schema_version': 1, 'recording_id': 'recording',
+                    'source_recording_id': 'source', 'result_id': 'result', 'files': [
+                        {'path': p, 'size_bytes': len(b), 'sha256': hashlib.sha256(b).hexdigest()} for p, b in payloads.items()]}
+        standard_client = MemoryS3({'r/results/result/manifest.json': json.dumps(standard).encode(),
+                                   **{'r/' + p: b for p, b in payloads.items()}})
+        standard_reader = Receipt(standard_client, 's3://bucket/r/results/result/manifest.json', self.root / 'standard-cache', 'source')
+        args.output = self.root / 'standard.zip'
+        self.assertEqual(build(args, standard_reader, self.root)['sha256'], previous_hash)
+
+        args.output = self.root / 'invalid.zip'
         layer['body_observed_frames'] = 1
         reader.json = lambda path: layer if path == 'layer.json' else pre
         with self.assertRaisesRegex(ValueError, '逐帧人体观测'):

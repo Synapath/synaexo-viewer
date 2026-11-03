@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import re
 import shutil
 import sys
 import tempfile
@@ -92,11 +93,29 @@ class Receipt:
             response['Body'].close()
         require(len(self.raw) <= JSON_LIMIT, 'manifest 超过 JSON 解析预算')
         self.manifest = json.loads(self.raw)
+        self.document = self.manifest
+        self.standard = self.document.get('format') == 'synaexo_result'
+        self.result_prefix = None
+        if self.standard:
+            result_id = safe_path(self.document['result_id'])
+            require('/' not in result_id and self.document.get('schema_version') == 1,
+                    '标准结果身份或版本无效')
+            suffix = f'results/{result_id}/manifest.json'
+            require(key.endswith(suffix) and (key == suffix or key[-len(suffix)-1] == '/'),
+                    '标准结果地址与 run ID 不一致')
+            self.prefix = key[:-len(suffix)]
+            self.result_prefix = f'results/{result_id}/'
         if expected_recording_id is not None:
-            require(self.manifest['recording_id'] == expected_recording_id,
+            require(expected_recording_id in {self.manifest['recording_id'], self.manifest.get('source_recording_id')},
                     'CSV 中的录制 ID 与 S3 manifest 不一致')
         self.files = {}
         for item in self.manifest['files']:
+            if self.standard:
+                path = safe_path(item['path'])
+                require(path.startswith((self.result_prefix, f'previews/{result_id}/')),
+                        '标准结果清单包含其他 run 的文件')
+                item = {'source_path': path, 'object_key': self.prefix + path,
+                        'bytes': item['size_bytes'], 'sha256': item['sha256']}
             path = safe_path(item['source_path'])
             object_key = safe_path(item['object_key'])
             require(path not in self.files and object_key.startswith(self.prefix)
@@ -107,15 +126,31 @@ class Receipt:
             self.files[path] = item
         self.cache = Path(cache)
         self.cache.mkdir(parents=True, exist_ok=True)
+        if self.standard:
+            layers = [p for p in self.files if p.startswith(self.result_prefix + 'motions/humans/')
+                      and p.endswith('/manifest.json')]
+            require(len(layers) == 1, '可视化需要唯一的人体结果清单')
+            self.manifest = {**self.document, 'published': {
+                'state': 'succeeded', 'raw_smplx': layers[0], 'version': result_id}}
+
+    def register(self, item):
+        path = safe_path(item['path'])
+        size, sha = item['size_bytes'], item['sha256']
+        require(type(size) is int and size >= 0 and isinstance(sha, str) and len(sha) == 64
+                and all(c in '0123456789abcdef' for c in sha), f'标准文件条目无效：{path}')
+        row = {'source_path': path, 'object_key': self.prefix + path, 'bytes': size, 'sha256': sha}
+        require(path not in self.files or self.files[path] == row, f'标准清单文件冲突：{path}')
+        self.files[path] = row
+        return path
 
     def named(self, name):
         matches = [p for p in self.files if PurePosixPath(p).name == name]
         require(len(matches) == 1, f'回执中找不到唯一文件：{name}')
         return matches[0]
 
-    def get(self, source_path):
+    def get(self, source_path, limit=FILE_LIMIT):
         item = self.files[source_path]
-        require(item['bytes'] <= FILE_LIMIT, f'文件超过 Viewer 预算：{source_path}')
+        require(limit is None or item['bytes'] <= limit, f'文件超过解析预算：{source_path}')
         target = self.cache / item['sha256']
         if (target.is_file() and target.stat().st_size == item['bytes']
                 and digest(target) == item['sha256']):
@@ -308,6 +343,9 @@ def build(args, receipt, temp):
         allowed = [(frames, width)] + ([(1, width), (width,)] if key in ('betas', 'expression') else [])
         require(a.shape in allowed and np.isfinite(a).all(), f'动作参数维度或数值无效：{key}')
     body = motion.get('body_observed', layer.get('body_observed'))
+    if body is None and layer.get('observations'):
+        with np.load(receipt.get(layer['observations']), allow_pickle=False) as observations:
+            body = observations['body_observed'].copy()
     if body is None and layer.get('body_observed_frames') == frames:
         body = np.ones(frames, dtype=bool)
     body = np.asarray(body)
@@ -381,24 +419,76 @@ def build(args, receipt, temp):
             'source_layer_version': layer['version'], 'source_manifest': args.manifest,
             'frames': frames, 'duration_ns': times[-1], 'cameras': [v['view_id'] for v in videos],
             'model_sha256': model_sha, 'source_model_sha256': source_model_sha,
+            'source_parameters_sha256': receipt.files[layer['parameters']]['sha256'],
             'physical_accuracy_passed': layer['physical_accuracy_passed'],
             'display_style': layer.get('display_style')}
 
 
-def main():
-    parser = argparse.ArgumentParser(description='将一个已发布的 SMPL-X 结果导出为自带模型和 README 的可视化 ZIP')
+def public_metadata(value):
+    """Reject private locations and credentials before copying result metadata."""
+    if isinstance(value, dict):
+        for key, child in value.items():
+            require(not re.search(r'(?i)(password|secret|credential|access.?key|session.?token|authorization)', key),
+                    '交付元信息包含凭据字段，未导出')
+            public_metadata(child)
+    elif isinstance(value, list):
+        for child in value:
+            public_metadata(child)
+    elif isinstance(value, bytes):
+        public_metadata(value.decode('utf-8'))
+    elif isinstance(value, str):
+        require(not value.startswith(('/', '\\', '~/'))
+                and not re.search(r'[A-Za-z][A-Za-z0-9+.-]*://|[A-Za-z]:[\\/]', value),
+                '交付元信息包含内部路径或远程地址，未导出')
+
+
+def publish_delivery(args, receipt, report, stage):
+    """Publish the data and visualization together; retries reuse identical files."""
+    visualization = stage / f'syanexo-{report["sha256"]}.zip'
+    os.replace(args.output, visualization)
+    report['archive'] = str(visualization)
+    from delivery_bundle import DeliveryPlan, build_delivery
+    plan = getattr(args, 'delivery_plan', None) or DeliveryPlan(receipt)
+    build_delivery(plan, report, stage / 'delivery')
+    entries = {p.relative_to(stage).as_posix(): digest(p) for p in sorted(stage.rglob('*')) if p.is_file()}
+    content_hash = hashlib.sha256(json.dumps(entries, sort_keys=True).encode()).hexdigest()
+    target = args.output_dir / f'synaexo-delivery-{content_hash}'
+    if target.exists():
+        require(target.is_dir() and not target.is_symlink(), '联合交付输出已存在且不是普通目录')
+        existing = {}
+        for path in target.rglob('*'):
+            require(not path.is_symlink(), '联合交付输出包含符号链接，未覆盖')
+            if path.is_file():
+                existing[path.relative_to(target).as_posix()] = digest(path)
+        require(existing == entries, f'同名交付目录内容不一致，未覆盖：{target}')
+    else:
+        os.rename(stage, target)
+    report['archive'] = str((target / visualization.name).resolve())
+    report['delivery'] = str((target / 'delivery').resolve())
+    report['directory'] = str(target.resolve())
+    report['delivery_files'] = len(entries) - 1
+    return report
+
+
+def main(with_delivery=False):
+    description = ('联合导出同一个 run 的完整数据交付包与可视化 ZIP' if with_delivery else
+                   '将一个已发布的 SMPL-X 结果导出为可视化 ZIP，或联合导出数据交付包')
+    parser = argparse.ArgumentParser(description=description)
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument('--manifest', help='来源 S3 manifest 地址')
+    group.add_argument('--manifest', help='S3 标准结果 manifest 或已有可视化结果回执')
     group.add_argument('--csv', type=Path, help='结果索引 CSV；配合 --recording-id 使用')
+    parser.add_argument('--result-manifest', help='旧回执联合导出时，补充同一 run 的标准 synaexo_result 清单')
     parser.add_argument('--recording-id', help='CSV 中完整、唯一的录制 ID')
     parser.add_argument('--model', type=Path, required=True, help='对应完整模型 NPZ：校验后将本次回放所需数组装入 models/smplx.npz')
-    parser.add_argument('--output-dir', type=Path, required=True, help='测试附件输出目录；生成 syanexo-<SHA-256>.zip')
+    parser.add_argument('--output-dir', type=Path, required=True, help='导出目录；联合模式生成含 delivery/ 和可视化 ZIP 的独立子目录')
+    parser.add_argument('--with-delivery', action='store_true', default=with_delivery,
+                        help='同时生成该 run 的数据交付包，与可视化 ZIP 放在同一个独立目录')
     cache = Path(tempfile.gettempdir()) / 'synaexo-package-cache'
     parser.add_argument('--cache-dir', type=Path, default=cache, help=f'通过 SHA-256 校验的载荷缓存目录（默认：{cache}）')
     parser.add_argument('--endpoint-url', help='S3 兼容服务地址；未传时使用 AWS SDK 配置')
     parser.add_argument('--storage-config', type=Path, help='可选的本机对象存储 JSON 配置，使用 profile / profiles 结构')
     parser.add_argument('--addressing-style', choices=['auto', 'virtual', 'path'], default='auto')
-    parser.add_argument('--force', action='store_true', help='覆盖已有输出 ZIP')
+    parser.add_argument('--force', action='store_true', help='覆盖单独导出的同名 ZIP；不覆盖联合交付目录')
     args = parser.parse_args()
     try:
         if args.csv:
@@ -408,17 +498,35 @@ def main():
         client = storage_client(args)
         receipt = Receipt(client, args.manifest, args.cache_dir,
                           args.recording_id if args.csv else None)
-        with tempfile.TemporaryDirectory(prefix='.synaexo-preview-', dir=args.output_dir) as directory:
-            args.output = Path(directory) / 'preview.zip'
-            report = build(args, receipt, Path(directory))
-            target = args.output_dir / f'syanexo-{report["sha256"]}.zip'
-            if target.exists() and not args.force:
-                require(digest(target) == report['sha256'], f'同名附件已损坏：{target}；覆盖请使用 --force')
+        if args.with_delivery:
+            from delivery_bundle import DeliveryPlan
+            delivery_receipt = (Receipt(client, args.result_manifest, args.cache_dir)
+                                if args.result_manifest else receipt)
+            args.delivery_plan = DeliveryPlan(delivery_receipt)
+            delivery = delivery_receipt.document
+            require(receipt.manifest['recording_id'] in {delivery['recording_id'], delivery['source_recording_id']}
+                    and receipt.manifest['published']['version'] == delivery['result_id'],
+                    '补充结果清单与可视化回执不是同一录制/run')
+        elif args.result_manifest:
+            require(False, '--result-manifest 仅用于联合导出')
+        with tempfile.TemporaryDirectory(prefix='.synaexo-package-', dir=args.output_dir) as directory:
+            temporary = Path(directory)
+            scratch, stage = temporary / 'scratch', temporary / 'publish'
+            scratch.mkdir()
+            stage.mkdir()
+            args.output = stage / 'preview.zip'
+            report = build(args, receipt, scratch)
+            if args.with_delivery:
+                report = publish_delivery(args, receipt, report, stage)
             else:
-                os.replace(args.output, target)
-            report['archive'] = str(target.resolve())
+                target = args.output_dir / f'syanexo-{report["sha256"]}.zip'
+                if target.exists() and not args.force:
+                    require(digest(target) == report['sha256'], f'同名附件已损坏：{target}；覆盖请使用 --force')
+                else:
+                    os.replace(args.output, target)
+                report['archive'] = str(target.resolve())
         print(json.dumps(report, ensure_ascii=False, indent=2))
-    except (ValueError, KeyError, TypeError, OSError, zipfile.BadZipFile, BotoCoreError, ClientError) as error:
+    except (ValueError, KeyError, TypeError, OSError, csv.Error, zipfile.BadZipFile, BotoCoreError, ClientError) as error:
         parser.exit(1, f'package_recording: 打包失败：{error}\n请核对来源回执、模型、S3 配置和输出路径。\n')
 
 

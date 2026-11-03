@@ -36,6 +36,8 @@ SynaExo Viewer 是独立的静态回放页面。拖入一个 ZIP 录制包，即
 
 需要从 SynaExo 已发布的 S3 结果准备录制包时，使用 [打包脚本](PACKAGE.md#打包脚本)。Python 和对象存储凭据仅在打包端准备；包内已附本次回放所需的模型。
 
+需要同时交付结果数据时，使用[联合导出脚本](PACKAGE.md#联合导出)，一次生成同一 run 的完整数据包和独立可视化 ZIP。数据包携带原始视频、冻结内外参、相机轨迹、同步与人体结果；可视化 ZIP 携带回放模型和已烘焙视频。
+
 ## 本地开发
 
 以下命令在仓库根目录执行，Node.js 使用 [Pages 工作流](.github/workflows/pages.yml)中配置的版本。
@@ -64,6 +66,8 @@ npm run build
 | [`src/smplx`](src/smplx) | SMPL-X 前向与 NPY／NPZ 解析 |
 | [`src/lib/archive.ts`](src/lib/archive.ts) | ZIP 按条目读取与 CRC 校验 |
 | [`tools/package_recording.py`](tools/package_recording.py) | 从已发布结果生成录制包 |
+| [`tools/export_delivery.py`](tools/export_delivery.py) | 联合导出单个 run 的完整数据包与可视化 ZIP |
+| [`tools/delivery_bundle.py`](tools/delivery_bundle.py) | 原片/标定/轨迹/同步的完整交付与引用校验 |
 | [`public`](public) | 品牌资源与依赖许可清单 |
 | [`docs`](docs) | 静态构建产物 |
 

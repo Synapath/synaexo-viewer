@@ -51,6 +51,66 @@ Boto3 沿用 AWS 凭据链。S3 兼容服务可指定 `--endpoint-url` 和 `--ad
 /tmp/synaexo-package-venv/bin/python -m unittest discover -s tools -p 'test_*.py'
 ```
 
+## 联合导出
+
+[`tools/export_delivery.py`](tools/export_delivery.py) 一次导出一个 run 的完整数据包和旁边的可视化 ZIP，交付格式为 `v1.0.0`。三份 Python 文件 `export_delivery.py`、`package_recording.py`、`delivery_bundle.py` 须放在同一目录，依赖仍使用 `tools/requirements-package.txt`。
+
+直接读取标准 S3 **结果清单**（`synaexo_result`，不是录制根清单）：
+
+```sh
+/tmp/synaexo-package-venv/bin/python tools/export_delivery.py --manifest s3://BUCKET/PREFIX/NAMESPACE/recordings/RECORDING_ID/results/RUN_ID/manifest.json --model /path/to/SMPLX_NEUTRAL.npz --output-dir /path/to/deliveries
+```
+
+脚本校验该 run 引用的 `synaexo_recording` 根清单，读取对应原视频、冻结标定、相机外参、同步与人体结果。只从明确引用读取对象，不扫描整个 bucket 或下载其他 run。原视频按源字节流式下载，可超过浏览器单文件预算，不执行转码、裁剪或算法重跑。
+
+CSV 中若仍是旧 `published.raw_smplx` 回执，联合导出时需补充**同一 run** 的标准结果清单：
+
+```sh
+/tmp/synaexo-package-venv/bin/python tools/export_delivery.py --csv /path/to/latest.csv --recording-id FULL_SOURCE_RECORDING_ID --result-manifest s3://BUCKET/PREFIX/NAMESPACE/recordings/RECORDING_ID/results/RUN_ID/manifest.json --model /path/to/SMPLX_NEUTRAL.npz --output-dir /path/to/deliveries
+```
+
+两份清单必须匹配来源录制 ID、run、源动作 SHA-256 与质检状态。旧回执只有处理产物时，不能据此找到原片；缺少补充清单就报错，不以烘焙人体的视频替代原片。标准结果清单也可直接放入 CSV 的 `S3清单` 列。`package_recording.py --with-delivery` 与联合入口等价；单独导出可视化时省略该选项，既有旧回执仍可使用。
+
+```text
+synaexo-delivery-<内容摘要>/                    # 整套文件路径与摘要生成的目录，与 ZIP 摘要分别计算
+├── delivery/                                  # 一个 run 的完整数据交付包
+│   ├── README.md                              # 身份、文件用途、读取方法、时间/坐标/单位和限制
+│   ├── manifest.json                          # 文件摘要及原片/设备/内外参/同步/人体的对应关系
+│   ├── videos/                                # 原始视频，保留源名、字节、素材身份和分段
+│   │   ├── gopro/<device_id>/<asset_id>/<source_filename>
+│   │   └── ego/<device_id>/<asset_id>/<source_filename>
+│   ├── calibration/<calibration_id>/           # 冻结标定，内参对应原视频图像域
+│   │   ├── gopro/<device_id>/intrinsics.json    # EXO 内参、畸变与原片分辨率
+│   │   └── ego/<device_id>/                    # EGO 单目或左右目参数
+│   │       ├── intrinsics.json                 # 左右目 K、畸变、分辨率和布局
+│   │       └── extrinsics.json                 # 双目相对 R/t，双目源必须提供
+│   ├── trajectories/cameras/<stream_id>/       # 每路相机的世界外参与轨迹
+│   │   ├── manifest.json                      # 方向、坐标系、单位、实际时间及静态/动态来源
+│   │   └── extrinsics.jsonl                    # 逐帧 R/t 或 T 与有效性，无效值保持 null
+│   ├── timeline/                              # 原视频、相机轨迹与人体的同步关系
+│   │   ├── reference.json                     # 参考时钟、无损 epoch 与主时间戳数组位置
+│   │   ├── clock_models.json                  # 各源时钟到参考时钟的映射
+│   │   ├── frame_mapping/<stream_id>.csv       # 段内源帧/PTS、包内原片路径及有效性
+│   │   └── quality.json                       # 源同步质量和限制
+│   └── motions/subject_01/                    # 同一 run 的人体数据
+│       ├── smplx_parameters.npz                # 源动作原字节，含坐标/手部表示/时间声明
+│       ├── observations.npz                    # 来源观测与人体有效性
+│       └── quality.json                        # 源人体质检，保留原字节
+└── syanexo-<ZIP 的完整 SHA-256>.zip             # 同一 run 的独立可视化附件
+    ├── README.md                              # 打开步骤、模型身份与源质检
+    ├── models/smplx.npz                        # 本次回放所需模型
+    ├── motions/subject_01/smplx_parameters.npz  # 动作数组与播放时间/有效性/身份
+    └── videos/                                # 既有烘焙人体的视频，原字节复制
+        ├── exo01.mp4                           # 实际 EXO 机位按两位序号提供
+        └── ego01.mp4                           # 实际存在的 EGO 视角
+```
+
+数据清单中的路径均相对于 `delivery/` 根目录。原始视频、人体参数和源质检保持原字节；相机清单的文件引用改为包内路径，帧映射补充 `source_video`。GoPro 多段原片使用来源 `chapters.json` 中的帧边界、SHA-256 和真实 PTS 偏移，将拼接域索引换成段内帧与 PTS；原值保留在 `joined_source_frame_index`、`joined_source_time_ns`。单段原片直接对应；分离式 EGO 双目按现有处理定义以左目同步，保留左右原片与 slot/布局信息。没有分段证据时不猜帧边界。
+
+参考 epoch 以十进制字符串保存，未提供时为 null。人体有效性优先保留源观测文件；仅在来源明确声明全帧有效时允许生成全有效数组，不以固定 FPS 或默认观测补数据。冻结内参、双目相对外参、世界外参、时钟映射、逐帧时间和统计均进行对应校验；缺少必需项时明确指出相机和缺项。
+
+整个数据包与可视化 ZIP 在临时目录校验完成后才发布，失败不留下半套交付。同名内容复用；同名目录被修改时保留原内容并报错，`--force` 不覆盖联合目录。标准输出 JSON 的 `directory`、`delivery`、`archive` 分别指向整套目录、数据包和可视化 ZIP。
+
 ## 动作 NPZ 与播放信息
 
 原有轴角动作数组保留，包括人体、双手、面部、平移、形状和表情参数，以及 `reference_timestamps_ns`、`coordinate_frame`、`units`、`flat_hand_mean`、`use_pca`。要求米制坐标、完整轴角和 `use_pca: false`，不以默认 FPS、坐标轴或手部均值补齐证据。
