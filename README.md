@@ -22,9 +22,9 @@ ZIP 首先读取中央目录，随后读取播放所需资源并核对 CRC32、�
 
 `npm run build` 输出可直接发布的静态文件到 `docs/`。资源使用相对路径，适配组织项目页及其他静态目录；依赖打进产物，不依赖第三方 CDN。`docs/` 为生成目录，修改源码后重建，不手工编辑。
 
-本仓库不配置自动部署 workflow。你可以在仓库 Settings → Pages 选择 **Deploy from a branch → main → /docs → Save**。默认项目站点为 `https://synapath.github.io/synaexo-viewer/`；是否发布及访问限制由仓库 Pages 设置决定。组织公开仓库也可以使用 Pages，不需要个人仓库或企业版私有站点功能。
+推送 `main` 后，[Pages 工作流](.github/workflows/pages.yml) 自动安装依赖、执行测试与 lint、构建并发布网站。检查或构建失败时不会进入部署。仓库 Settings → Pages 的发布来源使用 **GitHub Actions**，站点地址为 `https://synapath.github.io/synaexo-viewer/`。
 
-发布前运行本地检查并提交源码、锁文件及本次重建的 `docs/`。不要将真实录制、ZIP、模型权重、S3 密钥或带签名的下载地址提交到仓库。
+日常开发直接在 `main` 上进行。推送前运行本地检查并审查最终改动，提交源码、锁文件及本次重建的 `docs/`。不要将真实录制、ZIP、模型权重、S3 密钥或带签名的下载地址提交到仓库。
 
 ## 品牌与依赖
 

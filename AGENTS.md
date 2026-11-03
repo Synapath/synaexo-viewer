@@ -6,4 +6,5 @@
 - ZIP、模型、真实录制、凭据及带签名 URL 不进入 Git。包内路径及 JSON 均视为数据，不执行其中代码、不自动请求远程资源。
 - NPZ、坐标、时间轴和模型裁剪变更须与源结果对照验证，不以默认 FPS、坐标轴或手部均值冒充缺失证据。
 - 所有实现、测试及最终 Review 由主 agent 直接完成。
-- 本地验证：`npm test`、`npm run lint`、`npm run build`。不增加 CI 或自动发布；部署由用户明确操作。
+- 常规开发直接在 `main` 上进行，不另建分支或 worktree；用户另行要求时除外。
+- 本地验证：`npm test`、`npm run lint`、`npm run build`。推送 `main` 后，由 `.github/workflows/pages.yml` 检查、构建并发布 GitHub Pages，持续监控到部署完成。tag 和 GitHub Release 仍须用户单独要求。
