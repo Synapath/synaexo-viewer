@@ -9,16 +9,20 @@ export function readPreview(arrays: Record<string, NdArray>) {
     || typeof text.data[0] !== "string" || text.data[0].length > 65536)
     throw new Error("动作 NPZ 缺少预览信息，请使用新版打包脚本");
   const metadata = JSON.parse(text.data[0]);
-  if (metadata?.format !== "synaexo-preview" || metadata.schema_version !== 1
+  if (!["synaexo-preview", "synaexo-visualization"].includes(metadata?.format) || metadata.schema_version !== 1
     || typeof metadata.recording_id !== "string" || !metadata.recording_id
     || typeof metadata.result_id !== "string" || !metadata.result_id
     || typeof metadata.physical_accuracy_passed !== "boolean")
-    throw new Error("预览包身份或质量状态无效");
+    throw new Error("可视化包身份或质量状态无效");
   const model = metadata.model;
+  const bundledModel = metadata.format === "synaexo-visualization";
   if (!model || !hash(model.sha256) || arrays.model_sha256?.data[0] !== model.sha256
     || !integer(model.num_betas) || model.num_betas < 1 || model.num_betas > 300
     || !integer(model.num_expression) || model.num_expression < 1 || model.num_expression > 100)
-    throw new Error("预览包模型身份或维数无效");
+    throw new Error("可视化包模型身份或维数无效");
+  if (bundledModel && (!hash(model.source_sha256) || arrays.source_model_sha256?.data[0] !== model.source_sha256
+    || !integer(model.bytes) || model.bytes < 1 || model.bytes > 256 * 1024 ** 2))
+    throw new Error("包内模型大小或来源摘要无效");
   const numeric = (key: string, shape: number[]): NumericArray => {
     const a = arrays[key];
     if (!a || Array.isArray(a.data) || a.shape.join() !== shape.join()
@@ -42,7 +46,7 @@ export function readPreview(arrays: Record<string, NdArray>) {
   const body = numeric("body_observed", [frames]);
   if (!body.every(v => v === 0 || v === 1)) throw new Error("人体有效性无效");
   const videos = metadata.videos;
-  if (!Array.isArray(videos) || !videos.length || videos.length > 16) throw new Error("预览包需包含 1–16 路视频");
+  if (!Array.isArray(videos) || !videos.length || videos.length > 16) throw new Error("可视化包需包含 1–16 路视频");
   const pts = numeric("preview_video_pts_ns", [videos.length, frames]),
     observed = numeric("preview_source_observed", [videos.length, frames]);
   const ids = new Set<string>(), views = new Set<string>();
@@ -61,8 +65,9 @@ export function readPreview(arrays: Record<string, NdArray>) {
       || !valid.every(n => n === 0 || n === 1)) throw new Error("视频时间轴或逐帧有效性与动作不一致");
     return { camera_id: v.camera_id as string, view_id: v.view_id as string, kind: v.kind as "gopro" | "ego",
       image_size: v.image_size as [number, number], video_pts_ns: videoTimes, source_observed: Array.from(valid, Boolean),
-      path: `previews/${v.view_id.toLowerCase()}.mp4`, bytes: v.bytes as number, sha256: v.sha256 as string };
+      path: `${bundledModel ? "videos" : "previews"}/${v.view_id.toLowerCase()}.mp4`, bytes: v.bytes as number, sha256: v.sha256 as string };
   });
   return { contract, cameras, body: Array.from(body, Boolean), modelHash: model.sha256 as string,
+    bundledModel, modelBytes: bundledModel ? model.bytes as number : undefined,
     qualityPassed: metadata.physical_accuracy_passed as boolean };
 }

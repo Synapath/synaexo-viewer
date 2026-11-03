@@ -171,6 +171,66 @@ def validate_model(source, betas, expressions, flat_hand_mean):
     return digest(source)
 
 
+def write_playback_model(source, destination, betas, expressions, flat_hand_mean):
+    keys = ['v_template', 'posedirs', 'J_regressor', 'weights', 'kintree_table', 'f']
+    if not flat_hand_mean:
+        keys += ['hands_meanl', 'hands_meanr']
+    with np.load(source, allow_pickle=False) as model:
+        arrays = {key: model[key] for key in keys}
+        # Keep the active bases and the fixed expression offset used by SMPL-X.
+        compact = np.zeros((10475, 3, 300 + expressions), dtype=np.float32)
+        compact[:, :, :betas] = model['shapedirs'][:, :, :betas]
+        compact[:, :, 300:] = model['shapedirs'][:, :, 300:300 + expressions]
+        arrays['shapedirs'] = compact
+    np.savez_compressed(destination, **{k: np.asfortranarray(v) for k, v in arrays.items()})
+    return digest(destination)
+
+
+def visualization_readme(metadata, frames, duration_ns, world_frame):
+    videos = '\n'.join(f'    ├── {v["view_id"].lower()}.mp4  ({v["kind"]})' for v in metadata['videos'])
+    quality = '通过' if metadata['physical_accuracy_passed'] else '未通过'
+    return f'''# SynaExo 可视化包
+
+本包用于本地查看一个 run 的 SMPL-X 人体和同步 EXO／EGO 视频。
+
+- 录制 ID：`{metadata['recording_id']}`
+- run ID：`{metadata['result_id']}`
+- 帧数：{frames}；时间跨度：{duration_ns / 1e9:.6f} 秒
+- 坐标系：`{world_frame}`；单位：米
+- 源物理精度检查：{quality}。文件校验和播放成功不代表物理精度通过。
+
+## 文件
+
+```text
+README.md
+models/smplx.npz
+motions/subject_01/smplx_parameters.npz
+videos/
+{videos}
+```
+
+## 打开
+
+1. 打开 https://synapath.github.io/synaexo-viewer/ 。
+2. 拖入整个 ZIP，或点击「打开 ZIP」。包内已带模型，无需另行导入。
+3. 使用底部时间轴播放、暂停和跳转；三维视图可拖动旋转、滚轮缩放。
+
+网页在浏览器本地读取，不上传文件，不需要 Python 或 S3 凭据。
+视频中的人体已烘焙进 MP4，独立三维人体材质不会改变视频画面。
+动作 NPZ 保存时间戳、逐帧有效性和视频校验信息，不以默认 FPS 补齐数据。
+
+## 模型与校验
+
+- 模型维数：{metadata['model']['num_betas']} 维体型、{metadata['model']['num_expression']} 维表情。
+- 包内模型 SHA-256：`{metadata['model']['sha256']}`
+- 原模型 SHA-256：`{metadata['model']['source_sha256']}`
+- 包内模型仅保留本次动作使用的形状／表情基底，以及姿态修正、关节回归和蒙皮数据，不是通用完整模型。
+- ZIP 的 SHA-256 见文件名；该摘要覆盖 README 和全部载荷。
+
+模型和录制仅按各自适用的许可范围分发，不将权重发布到公开仓库或 GitHub Pages。
+'''
+
+
 class Package:
     def __init__(self):
         self.items = {}
@@ -253,12 +313,16 @@ def build(args, receipt, temp):
     body = np.asarray(body)
     require(body.shape == (frames,) and body.dtype.kind == 'b', '缺少逐帧人体观测证据')
     require(int(body.sum()) == layer['body_observed_frames'], '人体有效性与来源统计不一致')
-    model_sha = validate_model(args.model, betas, expressions, flat)
+    source_model_sha = validate_model(args.model, betas, expressions, flat)
     if 'model_sha256' in motion:
-        require(str(motion['model_sha256'].item()) == model_sha, '模型与动作参数的摘要不一致')
+        require(str(motion['model_sha256'].item()) == source_model_sha, '模型与动作参数的摘要不一致')
+    model_path = temp / 'smplx.npz'
+    model_sha = write_playback_model(args.model, model_path, betas, expressions, flat)
     motion['body_observed'] = body
     motion['model_sha256'] = np.array(model_sha)
+    motion['source_model_sha256'] = np.array(source_model_sha)
     pack = Package()
+    pack.add('models/smplx.npz', model_path, 'smplx_playback_model')
     videos, ids, points, observed = [], set(), [], []
     counts = {'gopro': 0, 'ego': 0}
     pre = receipt.json(layer['preprocessing'])
@@ -290,14 +354,15 @@ def build(args, receipt, temp):
         path = projection['path']
         require(path.endswith('.mp4'), f'已有叠加视频必须是 MP4：{cid}')
         local = receipt.get(path)
-        pack.add(f'previews/{view.lower()}.mp4', local, 'baked_projection_video', receipt.files[path])
+        pack.add(f'videos/{view.lower()}.mp4', local, 'baked_projection_video', receipt.files[path])
         videos.append({'camera_id': cid, 'view_id': view, 'kind': kind,
                        'image_size': dimensions, 'bytes': local.stat().st_size, 'sha256': digest(local)})
         points.append(pts)
-    metadata = {'format': 'synaexo-preview', 'schema_version': 1,
+    metadata = {'format': 'synaexo-visualization', 'schema_version': 1,
                 'recording_id': source['recording_id'], 'result_id': published['version'],
                 'physical_accuracy_passed': layer['physical_accuracy_passed'],
-                'model': {'sha256': model_sha, 'num_betas': betas, 'num_expression': expressions},
+                'model': {'sha256': model_sha, 'source_sha256': source_model_sha,
+                          'bytes': model_path.stat().st_size, 'num_betas': betas, 'num_expression': expressions},
                 'videos': videos}
     motion['preview_metadata'] = np.array(json.dumps(metadata, ensure_ascii=False, separators=(',', ':')))
     motion['preview_video_pts_ns'] = np.asarray(points, dtype=np.int64)
@@ -306,23 +371,27 @@ def build(args, receipt, temp):
     np.savez_compressed(motion_path, **motion)
     require(motion_path.stat().st_size <= 128 * 1024**2, '动作参数超过浏览器预算')
     pack.add('motions/subject_01/smplx_parameters.npz', motion_path, 'smplx_axis_angle')
+    readme = temp / 'README.md'
+    readme.write_text(visualization_readme(metadata, frames, times[-1], layer['world_frame']), encoding='utf-8')
+    pack.add('README.md', readme, 'readme')
     pack.write(args.output, force=args.force)
     return {'archive': str(args.output.resolve()), 'bytes': args.output.stat().st_size,
             'sha256': digest(args.output), 'verified_payloads': len(pack.files),
             'recording_id': source['recording_id'], 'result_id': published['version'],
             'source_layer_version': layer['version'], 'source_manifest': args.manifest,
             'frames': frames, 'duration_ns': times[-1], 'cameras': [v['view_id'] for v in videos],
-            'model_sha256': model_sha, 'physical_accuracy_passed': layer['physical_accuracy_passed'],
+            'model_sha256': model_sha, 'source_model_sha256': source_model_sha,
+            'physical_accuracy_passed': layer['physical_accuracy_passed'],
             'display_style': layer.get('display_style')}
 
 
 def main():
-    parser = argparse.ArgumentParser(description='将已发布的 SMPL-X 结果打包为本地 Viewer ZIP')
+    parser = argparse.ArgumentParser(description='将一个已发布的 SMPL-X 结果导出为自带模型和 README 的可视化 ZIP')
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument('--manifest', help='来源 S3 manifest 地址')
     group.add_argument('--csv', type=Path, help='结果索引 CSV；配合 --recording-id 使用')
     parser.add_argument('--recording-id', help='CSV 中完整、唯一的录制 ID')
-    parser.add_argument('--model', type=Path, required=True, help='对应模型 NPZ：校验并记录摘要，模型不装入预览 ZIP')
+    parser.add_argument('--model', type=Path, required=True, help='对应完整模型 NPZ：校验后将本次回放所需数组装入 models/smplx.npz')
     parser.add_argument('--output-dir', type=Path, required=True, help='测试附件输出目录；生成 syanexo-<SHA-256>.zip')
     cache = Path(tempfile.gettempdir()) / 'synaexo-package-cache'
     parser.add_argument('--cache-dir', type=Path, default=cache, help=f'通过 SHA-256 校验的载荷缓存目录（默认：{cache}）')

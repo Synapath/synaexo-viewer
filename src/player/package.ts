@@ -340,16 +340,22 @@ export async function prepareRecording(
 ): Promise<Recording> {
   if (archive.assets.some(a => a.path === "manifest.json"))
     return prepareLegacyRecording(archive, signal, progress);
-  const motions = archive.assets.filter(a => /^motions\/[^/]+\/smplx_parameters\.npz$/.test(a.path));
-  if (motions.length !== 1 || archive.assets.some(a => a.path !== motions[0]?.path && !/^previews\/(exo|ego)\d{2}\.mp4$/.test(a.path)))
-    throw new Error("预览包需包含一个 motions/<subject>/smplx_parameters.npz 和 previews/ 视频");
+  const assets = archive.assets.filter(a => a.path !== "README.md");
+  const motions = assets.filter(a => /^motions\/[^/]+\/smplx_parameters\.npz$/.test(a.path));
+  if (motions.length !== 1 || assets.some(a => a.path !== motions[0]?.path && a.path !== "models/smplx.npz"
+    && !/^(videos|previews)\/(exo|ego)\d{2}\.mp4$/.test(a.path)))
+    throw new Error("可视化包需包含一个动作 NPZ、包内模型和 videos/ 视频");
   if (motions[0].bytes > 128 * 1024 ** 2) throw new Error("动作参数超过浏览器预算");
   progress("正在读取动作参数…");
   const motionBuffer = await (await archive.blob(motions[0].path, signal)).arrayBuffer();
   const parsed = readPreview(await parseNpz(new Uint8Array(motionBuffer)));
-  if (archive.assets.length !== 1 + parsed.cameras.length) throw new Error("视频清单与预览包文件不一致");
+  if (assets.length !== 1 + parsed.cameras.length + Number(parsed.bundledModel)) throw new Error("文件清单与可视化包内容不一致");
   progress("正在加载 SMPL-X 模型…");
-  const model = await resolveModel(parsed.modelHash, signal);
+  if (parsed.bundledModel && assets.find(a => a.path === "models/smplx.npz")?.bytes !== parsed.modelBytes)
+    throw new Error("包内模型缺失或大小不符：models/smplx.npz");
+  const model = parsed.bundledModel
+    ? await (await archive.blob("models/smplx.npz", signal)).arrayBuffer()
+    : await resolveModel(parsed.modelHash, signal);
   signal.throwIfAborted();
   if (sha256Hex(model) !== parsed.modelHash) throw new Error("模型与动作参数的摘要不一致");
   const engine = new ForwardEngine(), urls: string[] = [];

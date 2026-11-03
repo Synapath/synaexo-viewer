@@ -39,6 +39,19 @@ test("minimal preview preserves EXO/EGO identities, exact times and missing-fram
   ]);
   expect(p.qualityPassed).toBe(false);
 });
+test("visualization package binds its included model and uses the videos directory", () => {
+  const { arrays, metadata, update } = preview();
+  metadata.format = "synaexo-visualization";
+  Object.assign(metadata.model, { source_sha256: "c".repeat(64), bytes: 1234 });
+  arrays.source_model_sha256 = array([], ["c".repeat(64)]);
+  update();
+  const result = readPreview(arrays);
+  expect(result.bundledModel).toBe(true);
+  expect(result.modelBytes).toBe(1234);
+  expect(result.cameras.map(v => v.path)).toEqual(["videos/exo01.mp4", "videos/ego01.mp4"]);
+  arrays.source_model_sha256.data[0] = "d".repeat(64);
+  expect(() => readPreview(arrays)).toThrow("来源摘要");
+});
 test("rejects mismatched model, invalid identities and unsupported metadata", () => {
   const { arrays, metadata, update } = preview();
   arrays.model_sha256.data[0] = "c".repeat(64);

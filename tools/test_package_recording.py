@@ -94,7 +94,7 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual(output.read_bytes(), b'previous output')
         self.assertEqual(list(self.root.glob('*.part')), [])
 
-    def test_preview_only_contains_motion_and_videos_with_exact_timing_and_masks(self):
+    def test_visualization_bundles_readme_model_motion_and_videos_with_exact_timing(self):
         def npz(**arrays):
             out = io.BytesIO()
             np.savez_compressed(out, **arrays)
@@ -142,11 +142,25 @@ class PackagingTests(unittest.TestCase):
         self.assertFalse(report['physical_accuracy_passed'])
         self.assertEqual(report['cameras'], ['EGO01'])
         with zipfile.ZipFile(args.output) as archive:
-            self.assertEqual(sorted(archive.namelist()), ['motions/subject_01/smplx_parameters.npz', 'previews/ego01.mp4'])
-            self.assertEqual(archive.read('previews/ego01.mp4'), data['cam.mp4'])
+            self.assertEqual(sorted(archive.namelist()), ['README.md', 'models/smplx.npz', 'motions/subject_01/smplx_parameters.npz', 'videos/ego01.mp4'])
+            self.assertEqual(archive.read('videos/ego01.mp4'), data['cam.mp4'])
+            readme = archive.read('README.md').decode('utf-8')
+            for value in ['recording', 'result', 'models/smplx.npz', 'ego01.mp4', '未通过', '无需另行导入']:
+                self.assertIn(value, readme)
+            self.assertNotIn('s3://', readme)
+            with np.load(io.BytesIO(archive.read('models/smplx.npz')), allow_pickle=False) as packed:
+                self.assertEqual(packed['shapedirs'].shape, (10475, 3, 301))
+                self.assertEqual(packed['shapedirs'][0, 0, 0], 2)
+                self.assertEqual(packed['shapedirs'][0, 0, 1], 0)
+                self.assertEqual(packed['shapedirs'][0, 0, 300], 3)
+                self.assertEqual(packed['posedirs'][0, 0, 0], 7)
             with np.load(io.BytesIO(archive.read('motions/subject_01/smplx_parameters.npz')), allow_pickle=False) as params:
                 metadata = json.loads(params['preview_metadata'].item())
-                self.assertEqual(metadata['model']['sha256'], digest(model))
+                import hashlib
+                self.assertEqual(metadata['model']['sha256'], hashlib.sha256(archive.read('models/smplx.npz')).hexdigest())
+                self.assertEqual(metadata['model']['source_sha256'], digest(model))
+                self.assertEqual(params['source_model_sha256'].item(), digest(model))
+                self.assertEqual(metadata['model']['bytes'], archive.getinfo('models/smplx.npz').file_size)
                 self.assertEqual(params['reference_timestamps_ns'].tolist(), times.tolist())
                 self.assertEqual(params['preview_video_pts_ns'].tolist(), [[0, 33_333_333]])
                 self.assertEqual(params['preview_source_observed'].tolist(), [[False, True]])

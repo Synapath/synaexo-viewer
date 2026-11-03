@@ -29,12 +29,12 @@ SynaExo Viewer 是独立的静态回放页面。拖入一个 ZIP 录制包，即
 
 1. 打开 [Viewer](https://synapath.github.io/synaexo-viewer/)。
 2. 拖入按 [ZIP 播放包约定](PACKAGE.md)准备的文件，或点击「打开 ZIP」。
-3. 首次按提示导入对应的 SMPL-X 模型；页面缓存模型后自动继续，同站点后续复用。
+3. 页面自动读取包内模型和动作参数，无需另行导入模型。
 4. 使用底部时间轴控制同步回放，在三维视图中拖动旋转、滚轮缩放。
 
-三维人体显示为不透明白色，EXO／EGO 视频保留已烘焙的原画面。预览 ZIP 只包含 `motions/` 与 `previews/`，格式和时间要求见 [预览 ZIP](PACKAGE.md)。
+三维人体显示为不透明白色，EXO／EGO 视频保留已烘焙的原画面。可视化 ZIP 包含 `README.md`、`models/`、`motions/` 和 `videos/`，格式和时间要求见 [可视化包](PACKAGE.md)。
 
-需要从 SynaExo 已发布的 S3 结果准备录制包时，使用 [打包脚本](PACKAGE.md#打包脚本)。Python 和对象存储凭据仅在打包端准备；播放者需按适用许可获取对应模型。
+需要从 SynaExo 已发布的 S3 结果准备录制包时，使用 [打包脚本](PACKAGE.md#打包脚本)。Python 和对象存储凭据仅在打包端准备；包内已附本次回放所需的模型。
 
 ## 本地开发
 
@@ -77,7 +77,7 @@ npm run build
 
 录制包内的路径与 JSON 仅作为数据读取。播放载荷会核对 CRC32、文件大小和清单 SHA-256；关闭、切换或取消导入时释放相应资源。包内校验通过不代表源结果通过物理精度验收，来源状态保持不变，详见 [校验与分发](PACKAGE.md#校验与分发)。
 
-真实录制、ZIP、模型权重、凭据和带签名的下载地址不提交到仓库。模型权重由使用者按适用许可获取，独立导入浏览器缓存，不随网站和新预览 ZIP 分发。
+真实录制、ZIP、模型权重、凭据和带签名的下载地址不提交到仓库。打包者须按模型适用许可在获授权范围内分发含模型的 ZIP；模型权重不随网站发布。
 
 X 标志沿用 [SynaExo 品牌资源](https://github.com/Synapath/synaverse/blob/master/migration_sources/synaexo/frontend/public/brand/exo-4d-mark.svg)。SMPL-X 前向实现参考 [Synapath/smplx-viewer](https://github.com/Synapath/smplx-viewer)，保留完整姿态修正和线性混合蒙皮，许可见 [smplx-viewer MIT](licenses/smplx-viewer-MIT.txt)。
 
