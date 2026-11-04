@@ -136,7 +136,7 @@ Viewer 自动读取 `models/smplx.npz`，无需再选择模型。打包器保留
 
 该模型仅用于本包声明的参数维数，不作为通用完整模型。模型和录制按适用许可在获授权的范围内分发；真实 ZIP 和模型权重不提交到公开仓库或 GitHub Pages，参见 [SMPL-X 模型许可](https://smpl-x.is.tue.mpg.de/modellicense.html)。
 
-已发布的无模型旧包仍支持独立导入模型并复用 IndexedDB 缓存。缓存按同一浏览器、同一站点的模型摘要区分，不是新包打开的前置条件。
+每个可视化包必须附带回放模型。缺少模型的旧包需用新版打包脚本重新导出；Viewer 直接读取包内模型，不提供单独导入或浏览器模型缓存。
 
 ## 校验与分发
 
@@ -144,4 +144,4 @@ Viewer 自动读取 `models/smplx.npz`，无需再选择模型。打包器保留
 
 真实 ZIP、模型和凭据保持在仓库之外。报告可用于核对单次打包的来源和摘要，不是可视化 ZIP 的必需文件。
 
-页面继续支持已发布的 `synaexo-viewer-package` 旧包，包括包内模型和旧清单；新脚本生成本文的 README、models、motions、videos 结构。已发布的双目录旧包继续读取其 `previews/` 视频，不重命名历史文件。旧包的 `clean_proxy` 分支仍要求视频已去畸变且具备相应标定。
+页面继续支持自带模型的 `synaexo-viewer-package` 旧清单包及其 `previews/` 视频；新脚本生成本文的 README、models、motions、videos 结构。旧清单包的 `clean_proxy` 分支仍要求视频已去畸变且具备相应标定。源质检字段保留在交付数据中，Viewer 不展示质检状态。

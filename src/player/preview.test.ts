@@ -19,38 +19,38 @@ function preview() {
   arrays.coordinate_frame = array([], ["synthetic"]);
   arrays.units = array([], ["m"]);
   arrays.model_sha256 = array([], ["a".repeat(64)]);
+  arrays.source_model_sha256 = array([], ["c".repeat(64)]);
   arrays.body_observed = array([2], new Int32Array([1, 0]));
   arrays.preview_video_pts_ns = array([2, 2], new Float64Array([0, 33_333_333, 0, 33_333_333]));
   arrays.preview_source_observed = array([2, 2], new Int32Array([0, 1, 1, 0]));
-  const metadata = { format: "synaexo-preview", schema_version: 1, recording_id: "recording", result_id: "run",
-    physical_accuracy_passed: false, model: { sha256: "a".repeat(64), num_betas: 1, num_expression: 1 },
+  const metadata = { format: "synaexo-visualization", schema_version: 1, recording_id: "recording", result_id: "run",
+    model: { sha256: "a".repeat(64), source_sha256: "c".repeat(64), bytes: 1234, num_betas: 1, num_expression: 1 },
     videos: ["gopro", "ego"].map((kind, i) => ({ camera_id: `cam${i}`, kind,
       view_id: kind === "gopro" ? "EXO01" : "EGO01", bytes: 42, sha256: "b".repeat(64), image_size: [64, 64] })) };
   const update = () => { arrays.preview_metadata = array([], [JSON.stringify(metadata)]); };
   update();
   return { arrays, metadata, update };
 }
-test("minimal preview preserves EXO/EGO identities, exact times and missing-frame masks", () => {
+test("bundled preview preserves EXO/EGO identities, exact times and missing-frame masks without a quality status", () => {
   const { arrays } = preview(), p = readPreview(arrays);
   expect(p.contract.times).toEqual([0, 33_333_333]);
   expect(p.body).toEqual([true, false]);
   expect(p.cameras.map(v => [v.path, v.source_observed])).toEqual([
-    ["previews/exo01.mp4", [false, true]], ["previews/ego01.mp4", [true, false]],
+    ["videos/exo01.mp4", [false, true]], ["videos/ego01.mp4", [true, false]],
   ]);
-  expect(p.qualityPassed).toBe(false);
 });
 test("visualization package binds its included model and uses the videos directory", () => {
-  const { arrays, metadata, update } = preview();
-  metadata.format = "synaexo-visualization";
-  Object.assign(metadata.model, { source_sha256: "c".repeat(64), bytes: 1234 });
-  arrays.source_model_sha256 = array([], ["c".repeat(64)]);
-  update();
+  const { arrays } = preview();
   const result = readPreview(arrays);
-  expect(result.bundledModel).toBe(true);
   expect(result.modelBytes).toBe(1234);
   expect(result.cameras.map(v => v.path)).toEqual(["videos/exo01.mp4", "videos/ego01.mp4"]);
   arrays.source_model_sha256.data[0] = "d".repeat(64);
   expect(() => readPreview(arrays)).toThrow("来源摘要");
+});
+test("model-free preview packages require repackaging", () => {
+  const { arrays, metadata, update } = preview();
+  metadata.format = "synaexo-preview"; update();
+  expect(() => readPreview(arrays)).toThrow("需自带 SMPL-X 模型");
 });
 test("rejects mismatched model, invalid identities and unsupported metadata", () => {
   const { arrays, metadata, update } = preview();
@@ -60,7 +60,7 @@ test("rejects mismatched model, invalid identities and unsupported metadata", ()
   metadata.videos[1].view_id = "EXO01"; update();
   expect(() => readPreview(arrays)).toThrow("视频身份");
   metadata.schema_version = 2; update();
-  expect(() => readPreview(arrays)).toThrow("身份或质量");
+  expect(() => readPreview(arrays)).toThrow("身份");
 });
 test("rejects guessed or imprecise video timing and fabricated validity", () => {
   const { arrays } = preview();

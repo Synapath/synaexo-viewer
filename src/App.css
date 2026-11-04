@@ -36,16 +36,6 @@ main {
   align-items: center;
   gap: 12px;
 }
-.quality-warning {
-  color: #b6a36f;
-  display: flex;
-  align-items: center;
-  padding: 8px;
-}
-.quality-warning svg {
-  width: 17px;
-  height: 17px;
-}
 .error-banner {
   margin: 12px 24px 0;
   padding: 10px 14px;
@@ -179,18 +169,5 @@ main {
   font-size: 14px;
 }
 
-.toast {
-  position: fixed;
-  left: 50%;
-  bottom: 24px;
-  transform: translateX(-50%);
-  z-index: 20;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 10px 18px;
-  background: #242424;
-  color: #eee;
-  font-size: 14px;
-}
 .error-banner > span { flex: 1; min-width: 0; }
 .error-banner > button { flex: none; }

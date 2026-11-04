@@ -3,7 +3,6 @@ import { RecordingArchive, safeEntryPath } from "../lib/archive";
 import { ForwardEngine } from "./engine";
 import { parseNpz } from "../smplx/npy";
 import { readPreview } from "./preview";
-import { cachedModel, sha256Hex } from "./models";
 
 export type Camera = {
   camera_id: string;
@@ -26,7 +25,6 @@ export type Recording = {
   faces: Uint32Array;
   cameras: Camera[];
   engine: ForwardEngine;
-  qualityPassed: boolean;
   dispose: () => void;
 };
 const object = (value: unknown): Record<string, any> => {
@@ -36,6 +34,8 @@ const object = (value: unknown): Record<string, any> => {
 };
 const integer = (n: unknown) =>
   typeof n === "number" && Number.isSafeInteger(n);
+const sha256Hex = (buffer: ArrayBuffer) =>
+  Array.from(sha256(new Uint8Array(buffer)), n => n.toString(16).padStart(2, "0")).join("");
 export function validateTimes(
   value: unknown,
   frames: number,
@@ -318,7 +318,6 @@ async function prepareLegacyRecording(
       faces: initialized.faces,
       cameras,
       engine,
-      qualityPassed: m.physical_accuracy_passed === true,
       dispose() {
         engine.dispose();
         urls.forEach(URL.revokeObjectURL);
@@ -336,26 +335,25 @@ async function prepareLegacyRecording(
 
 export async function prepareRecording(
   archive: RecordingArchive, signal: AbortSignal, progress: (text: string) => void,
-  resolveModel = cachedModel,
 ): Promise<Recording> {
   if (archive.assets.some(a => a.path === "manifest.json"))
     return prepareLegacyRecording(archive, signal, progress);
   const assets = archive.assets.filter(a => a.path !== "README.md");
+  const bundledModel = assets.find(a => a.path === "models/smplx.npz");
+  if (!bundledModel) throw new Error("可视化包缺少 models/smplx.npz，请重新打包并附带 SMPL-X 模型");
   const motions = assets.filter(a => /^motions\/[^/]+\/smplx_parameters\.npz$/.test(a.path));
   if (motions.length !== 1 || assets.some(a => a.path !== motions[0]?.path && a.path !== "models/smplx.npz"
-    && !/^(videos|previews)\/(exo|ego)\d{2}\.mp4$/.test(a.path)))
+    && !/^videos\/(exo|ego)\d{2}\.mp4$/.test(a.path)))
     throw new Error("可视化包需包含一个动作 NPZ、包内模型和 videos/ 视频");
   if (motions[0].bytes > 128 * 1024 ** 2) throw new Error("动作参数超过浏览器预算");
   progress("正在读取动作参数…");
   const motionBuffer = await (await archive.blob(motions[0].path, signal)).arrayBuffer();
   const parsed = readPreview(await parseNpz(new Uint8Array(motionBuffer)));
-  if (assets.length !== 1 + parsed.cameras.length + Number(parsed.bundledModel)) throw new Error("文件清单与可视化包内容不一致");
+  if (assets.length !== 2 + parsed.cameras.length) throw new Error("文件清单与可视化包内容不一致");
   progress("正在加载 SMPL-X 模型…");
-  if (parsed.bundledModel && assets.find(a => a.path === "models/smplx.npz")?.bytes !== parsed.modelBytes)
+  if (bundledModel.bytes !== parsed.modelBytes)
     throw new Error("包内模型缺失或大小不符：models/smplx.npz");
-  const model = parsed.bundledModel
-    ? await (await archive.blob("models/smplx.npz", signal)).arrayBuffer()
-    : await resolveModel(parsed.modelHash, signal);
+  const model = await (await archive.blob("models/smplx.npz", signal)).arrayBuffer();
   signal.throwIfAborted();
   if (sha256Hex(model) !== parsed.modelHash) throw new Error("模型与动作参数的摘要不一致");
   const engine = new ForwardEngine(), urls: string[] = [];
@@ -378,7 +376,7 @@ export async function prepareRecording(
     signal.removeEventListener("abort", abort);
     return { frames: parsed.contract.frames, relative_timestamps_ns: parsed.contract.times,
       world_frame: parsed.contract.worldFrame, body_observed: parsed.body, faces: initialized.faces,
-      cameras, engine, qualityPassed: parsed.qualityPassed,
+      cameras, engine,
       dispose() { engine.dispose(); urls.forEach(URL.revokeObjectURL); archive.close(); } };
   } catch (error) {
     signal.removeEventListener("abort", abort); engine.dispose(); urls.forEach(URL.revokeObjectURL); throw error;

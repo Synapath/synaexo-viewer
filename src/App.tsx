@@ -8,18 +8,15 @@ import {
 } from "react";
 import {
   ArrowLeft,
-  Box,
   FileArchive,
   FolderOpen,
   LoaderCircle,
-  TriangleAlert,
   X,
 } from "lucide-react";
 import { openArchive, type RecordingArchive } from "./lib/archive";
 import { prepareRecording, type Recording } from "./player/package";
 const Player = lazy(() => import("./player/Player"));
 import "./App.css";
-import { MissingModel, importModel } from "./player/models";
 
 export default function App() {
   const [recording, setRecording] = useState<Recording | null>(null),
@@ -27,11 +24,6 @@ export default function App() {
   const [error, setError] = useState(""),
     [loading, setLoading] = useState(""),
     [dragging, setDragging] = useState(false);
-  const [notice, setNotice] = useState("");
-  const [needsModel, setNeedsModel] = useState(false);
-  const modelInput = useRef<HTMLInputElement>(null),
-    modelPending = useRef<AbortController | null>(null),
-    awaitingModel = useRef<{ file: File; hash: string } | null>(null);
   const input = useRef<HTMLInputElement>(null),
     pending = useRef<AbortController | null>(null),
     current = useRef<Recording | null>(null),
@@ -39,18 +31,12 @@ export default function App() {
   useEffect(
     () => () => {
       pending.current?.abort();
-      modelPending.current?.abort();
       const previous = current.current;
       current.current = null;
       previous?.dispose();
     },
     [],
   );
-  useEffect(() => {
-    if (!notice) return;
-    const timer = window.setTimeout(() => setNotice(""), 3000);
-    return () => clearTimeout(timer);
-  }, [notice]);
   const fail = useCallback((source: Recording, message: string) => {
     if (current.current !== source) return;
     current.current = null;
@@ -60,9 +46,6 @@ export default function App() {
   }, []);
   async function open(file: File) {
     pending.current?.abort();
-    modelPending.current?.abort();
-    awaitingModel.current = null;
-    setNeedsModel(false);
     const controller = new AbortController();
     pending.current = controller;
     setLoading("正在读取录制包…");
@@ -90,39 +73,14 @@ export default function App() {
       setGeneration((value) => value + 1);
     } catch (error) {
       archive?.close();
-      if (!controller.signal.aborted) {
-        if (error instanceof MissingModel) {
-          awaitingModel.current = { file, hash: error.hash };
-          setNeedsModel(true);
-          setError(error.message);
-        } else setError(`无法打开录制包：${(error as Error).message}`);
-      }
-    } finally {
-      if (!controller.signal.aborted) setLoading("");
-    }
-  }
-  async function cacheModel(file: File) {
-    pending.current?.abort();
-    modelPending.current?.abort();
-    const controller = new AbortController(), waiting = awaitingModel.current;
-    modelPending.current = controller;
-    setLoading("正在缓存模型…"); setError("");
-    try {
-      await importModel(file, controller.signal, waiting?.hash);
-      if (controller.signal.aborted) return;
-      setNotice("模型已缓存");
-      if (waiting && awaitingModel.current === waiting) await open(waiting.file);
-    } catch (error) {
-      if (!controller.signal.aborted) setError((error as Error).message);
+      if (!controller.signal.aborted)
+        setError(`无法打开录制包：${(error as Error).message}`);
     } finally {
       if (!controller.signal.aborted) setLoading("");
     }
   }
   function close() {
     pending.current?.abort();
-    modelPending.current?.abort();
-    awaitingModel.current = null;
-    setNeedsModel(false);
     const previous = current.current;
     current.current = null;
     previous?.dispose();
@@ -155,8 +113,7 @@ export default function App() {
           setError("请一次打开一个 ZIP 录制包");
           return;
         }
-        if (/\.npz$/i.test(files[0].name)) void cacheModel(files[0]);
-        else void open(files[0]);
+        void open(files[0]);
       }}
     >
       <header className="app-header">
@@ -167,15 +124,6 @@ export default function App() {
           </span>
         </a>
         <div className="header-actions">
-          {recording && !recording.qualityPassed && (
-            <span
-              className="quality-warning"
-              title="源结果未通过物理精度检查"
-              aria-label="源结果未通过物理精度检查"
-            >
-              <TriangleAlert />
-            </span>
-          )}
           {recording && (
             <button
               className="icon-button"
@@ -186,22 +134,12 @@ export default function App() {
               <X />
             </button>
           )}
-          <button onClick={() => modelInput.current?.click()} title="导入并缓存 SMPL-X 模型">
-            <Box />
-            导入模型
-          </button>
           <button onClick={() => input.current?.click()}>
             <FolderOpen />
             打开 ZIP
           </button>
         </div>
       </header>
-      <input ref={modelInput} type="file" accept=".npz" aria-label="SMPL-X 模型" hidden
-        onChange={(event) => {
-          const file = event.target.files?.[0];
-          if (file) void cacheModel(file);
-          event.target.value = "";
-        }} />
       <input
         ref={input}
         type="file"
@@ -216,12 +154,11 @@ export default function App() {
       {error && (
         <div className="error-banner" role="alert">
           <span>{error}</span>
-          {needsModel && <button onClick={() => modelInput.current?.click()}>选择模型</button>}
           <button
             className="icon-button"
             title="关闭提示"
             aria-label="关闭提示"
-            onClick={() => { setError(""); awaitingModel.current = null; setNeedsModel(false); }}
+            onClick={() => setError("")}
           >
             <X />
           </button>
@@ -266,9 +203,6 @@ export default function App() {
           <button
             onClick={() => {
               pending.current?.abort();
-              modelPending.current?.abort();
-              awaitingModel.current = null;
-              setNeedsModel(false);
               setLoading("");
             }}
           >
@@ -277,7 +211,6 @@ export default function App() {
           </button>
         </div>
       )}
-      {notice && <div className="toast" role="status">{notice}</div>}
       {dragging && (
         <div className="drag-overlay">
           <FileArchive />
