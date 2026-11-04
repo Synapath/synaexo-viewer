@@ -19,7 +19,7 @@ import { openArchive, type RecordingArchive } from "./lib/archive";
 import { prepareRecording, type Recording } from "./player/package";
 const Player = lazy(() => import("./player/Player"));
 import "./App.css";
-import { MissingModel, importModel } from "./player/models";
+import { MissingModel, importModel } from "../core/models";
 
 export default function App() {
   const [recording, setRecording] = useState<Recording | null>(null),

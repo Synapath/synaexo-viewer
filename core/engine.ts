@@ -1,3 +1,4 @@
+import type { ForwardReady } from "./forward";
 import type { MotionContract } from "./motion";
 export class ForwardEngine {
   private worker = new Worker(new URL("./forward.worker.ts", import.meta.url), {
@@ -46,7 +47,7 @@ export class ForwardEngine {
     motion: ArrayBuffer,
     maps: ArrayBuffer[],
     contract: MotionContract,
-  ): Promise<{ faces: Uint32Array; observed: boolean[][] }> {
+  ): Promise<ForwardReady> {
     return this.call(
       { type: "init", model, motion, maps, contract },
       [model, motion, ...maps],

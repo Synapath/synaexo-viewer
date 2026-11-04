@@ -9,7 +9,8 @@ const SHAPE_SPACE_DIM = 300; // SMPL-X stores 300 shape + 100 expression dirs in
 export type SmplxParams = {
   betas: Float32Array; // shape coefficients, length = numBetas
   expression: Float32Array; // face expression, length = numExpr
-  pose: Float32Array; // axis-angle, length = 55 * 3 = 165 (joint 0 = global orientation)
+  pose?: Float32Array; // axis-angle, length = 55 * 3 = 165 (joint 0 = global orientation)
+  rotations?: Float32Array; // final local matrices, (55, 3, 3), no conversion
 };
 
 export type ForwardOptions = {
@@ -116,6 +117,7 @@ export class SmplxModel {
     const kintree = need("kintree_table"); // (2, J)
     const facesRaw = need("f"); // (F, 3)
 
+    const f32 = (a: NdArray) => a.data instanceof Float32Array ? a.data : Float32Array.from(a.data as Exclude<NdArray["data"], string[]>);
     const V = SMPLX_NUM_VERTS;
     const J = SMPLX_NUM_JOINTS;
     const totalShapeDim = shapedirsRaw.shape[2];
@@ -132,7 +134,7 @@ export class SmplxModel {
 
     // Build a compact shapedirs of layout (V*3, C): first numBetas shape dirs,
     // then numExpr expression dirs (which live at offset 300 in the raw array).
-    const sd = shapedirsRaw.data as Float32Array;
+    const sd = f32(shapedirsRaw);
     const shapedirs = new Float32Array(V * 3 * C);
     for (let row = 0; row < V * 3; row++) {
       const srcBase = row * totalShapeDim;
@@ -145,13 +147,13 @@ export class SmplxModel {
     }
 
     // posedirs raw is (V, 3, 486); flattened C-order it is already (V*3, 486).
-    const posedirs = posedirsRaw.data as Float32Array;
+    const posedirs = f32(posedirsRaw);
     if (posedirs.length !== V * 3 * 486) {
       throw new Error(`Unexpected posedirs size (${posedirs.length}).`);
     }
 
-    const jRegressor = jRegRaw.data as Float32Array; // (J, V)
-    const weights = weightsRaw.data as Float32Array; // (V, J)
+    const jRegressor = f32(jRegRaw); // (J, V)
+    const weights = f32(weightsRaw); // (V, J)
 
     const parents = new Int32Array(J);
     const kt = kintree.data as Int32Array;
@@ -178,7 +180,7 @@ export class SmplxModel {
       numExpr,
       faces,
       parents,
-      vTemplate: vTemplate.data as Float32Array,
+      vTemplate: f32(vTemplate),
       shapedirs,
       posedirs,
       jRegressor,
@@ -403,10 +405,12 @@ export class SmplxModel {
       this.shapeDirty = false;
     }
 
-    // 2. Per-joint rotation matrices from axis-angle pose.
-    for (let j = 0; j < J; j++) {
-      SmplxModel.rodrigues(params.pose, j * 3, this.rotMats, j * 9);
-    }
+    // Published matrix results already include the final hand and body rotations.
+    if (params.rotations) this.rotMats.set(params.rotations);
+    else if (params.pose) {
+      for (let j = 0; j < J; j++)
+        SmplxModel.rodrigues(params.pose, j * 3, this.rotMats, j * 9);
+    } else throw new Error("Missing SMPL-X rotations");
 
     // 3. Pose-corrective blend shapes: v_posed = v_shaped + posedirs @ (R_j - I).
     const vPosed = this.vPosed;

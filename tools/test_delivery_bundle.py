@@ -6,11 +6,12 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
+import zipfile
 
 import numpy as np
 
 from delivery_bundle import DeliveryPlan
-from package_recording import Receipt, digest, publish_delivery
+from package_recording import Receipt, build, digest, publish_delivery
 from test_package_recording import MemoryS3
 
 
@@ -106,6 +107,85 @@ class DeliveryTests(unittest.TestCase):
         report = dict(recording_id='source', result_id='run', source_parameters_sha256=hashlib.sha256(parameters).hexdigest(),
                       source_model_sha256='1' * 64, physical_accuracy_passed=False)
         return receipt, report, client, parameters, raw
+
+    def parameter_fixture(self):
+        receipt, _, client, _, originals = self.fixture()
+        objects = client.objects
+        prefix = 'results/run/'
+        layer_path = prefix + 'motions/humans/person/manifest.json'
+        layer = json.loads(objects['r/' + layer_path])
+        times = np.array([10**12,10**12+40_000_001,10**12+80_000_003],np.int64)
+        parents = np.zeros((2,55),np.int32); parents[0,0] = -1
+        weights = np.zeros((10475,55),np.float32); weights[:,0] = 1
+        model = self.root/'model.npz'
+        template = np.zeros((10475,3),np.float32)
+        template[:3] = [[-.4,-.5,3],[.4,-.5,3],[0,.5,3]]
+        np.savez_compressed(model,v_template=template,shapedirs=np.zeros((10475,3,10),np.float32),
+            posedirs=np.zeros((10475,3,486),np.float32),J_regressor=np.zeros((55,10475),np.float32),
+            kintree_table=parents,weights=weights,f=np.array([[0,1,2]],np.int32))
+        data = dict(reference_timestamps_ns=times,units=np.array('m'),coordinate_frame=np.array('world'),
+            flat_hand_mean=np.array(True),use_pca=np.array(False),model_sha256=np.array(digest(model)),
+            betas=np.zeros((1,10),np.float32),transl=np.zeros((3,3),np.float32),
+            joint_rotations=np.broadcast_to(np.eye(3,dtype=np.float32),(3,55,3,3)),
+            body_observed=np.array([True,False,True]),hand_accepted=np.array([[True,False],[False,False],[True,True]]),
+            hand_view_count=np.array([[2,0],[0,0],[3,4]],np.int64))
+        def npz(**values):
+            out=io.BytesIO();np.savez_compressed(out,**values);return out.getvalue()
+        original_parameters=npz(**data)
+        objects['r/'+layer['parameters']]=original_parameters
+        cameras=[]
+        for cid,kind in [('cam','gopro'),('ego-device','ego')]:
+            mapping=prefix+f'timeline/evidence/{cid}-source-frames.npz'
+            objects['r/'+mapping]=npz(reference_timestamps_ns=times,source_observed=np.array([True,True,False]))
+            path=f'previews/run/parameter-proxies/{cid}.mp4'
+            objects['r/'+path]=('proxy:'+cid).encode()
+            cameras.append(dict(camera_id=cid,kind=kind,frame_map=mapping,
+                calibration=dict(K=[[50,0,32],[0,50,32],[0,0,1]],image_size=[64,64]),
+                T_world_from_camera=np.eye(4).tolist(),pose_valid=[True,False,True],
+                proxy=dict(path=path,image_size=[32,32],video_pts_ns=[0,40_000_001,80_000_003])))
+        recipe_path='previews/run/parameter-proxies/manifest.json'
+        recipe=dict(format='synaexo-parameter-preview-v1',recording_id='recording',source_recording_id='source',
+            clock_id='clock',world_frame='world',parameters=layer['parameters'],cameras=cameras,
+            model=dict(model_sha256=digest(model),frames=3,max_abs_vertex_error_m=1e-7,max_allowed_error_m=.00002))
+        objects['r/'+recipe_path]=encoded(recipe)
+        layer.update(delivery_profile='parameters',preview=recipe_path)
+        objects['r/'+layer_path]=encoded(layer)
+        doc=receipt.document.copy()
+        doc['files']=[dict(path=key[2:],size_bytes=len(value),sha256=hashlib.sha256(value).hexdigest())
+                      for key,value in objects.items() if key.startswith(('r/results/run/','r/previews/run/')) and not key.endswith('results/run/manifest.json')]
+        objects['r/results/run/manifest.json']=encoded(doc)
+        receipt=Receipt(client,'s3://bucket/r/results/run/manifest.json',self.root/'parameter-cache')
+        return receipt,model,client,original_parameters,originals
+
+    def test_final_matrices_jointly_export_without_baked_videos_or_parameter_rewriting(self):
+        receipt,model,client,original_parameters,originals=self.parameter_fixture()
+        stage=self.root/'joint';stage.mkdir();scratch=self.root/'scratch';scratch.mkdir()
+        output=self.root/'exports';output.mkdir()
+        args=SimpleNamespace(model=model,output=stage/'visualization.zip',force=False,
+                             output_dir=output,manifest='s3://bucket/r/results/run/manifest.json',delivery_plan=DeliveryPlan(receipt))
+        report=build(args,receipt,scratch)
+        result=publish_delivery(args,receipt,report,stage)
+        delivery=Path(result['delivery']);archive=Path(result['archive'])
+        self.assertEqual((delivery/'motions/subject_01/smplx_parameters.npz').read_bytes(),original_parameters)
+        self.assertEqual(archive.name,'syanexo-'+digest(archive)+'.zip')
+        with zipfile.ZipFile(archive) as z:
+            self.assertEqual({n.split('/')[0] for n in z.namelist()},{'README.md','models','motions','videos'})
+            self.assertEqual(z.read('models/smplx.npz'),model.read_bytes())
+            self.assertEqual(z.read('videos/exo01.mp4'),client.objects['r/previews/run/parameter-proxies/cam.mp4'])
+            self.assertIn('未烘焙 SMPL-X',z.read('README.md').decode())
+            with np.load(io.BytesIO(z.read('motions/subject_01/smplx_parameters.npz'))) as motion, np.load(io.BytesIO(original_parameters)) as original:
+                for key in original.files:np.testing.assert_array_equal(motion[key],original[key])
+                meta=json.loads(str(motion['preview_metadata']))
+                self.assertEqual(meta['representation'],'smplx_local_rotations')
+                self.assertEqual(meta['model']['sha256'],digest(model))
+                self.assertEqual(meta['model']['num_expression'],0)
+                self.assertEqual([v['content'] for v in meta['videos']],['clean_proxy','clean_proxy'])
+                self.assertEqual(motion['preview_camera_0_K'][0,0],25)
+                self.assertEqual(motion['preview_camera_0_pose_valid'].tolist(),[True,False,True])
+                self.assertEqual(motion['preview_source_observed'].tolist(),[[True,True,False]]*2)
+        self.assertNotIn('r/previews/run/overlays/cam.mp4',client.reads)
+        for name,value in originals.items():
+            if '/tracker/' not in name:self.assertEqual((delivery/name.replace('raw/','videos/',1)).read_bytes(),value)
 
     def publish(self, receipt, report, label='stage'):
         stage = self.root / label

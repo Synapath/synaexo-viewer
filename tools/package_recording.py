@@ -3,6 +3,7 @@
 import argparse
 import csv
 import hashlib
+import math
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -183,16 +184,38 @@ class Receipt:
         return json.loads(self.get(path).read_bytes())
 
 
+def validate_npz_budget(path, keys=None):
+    """Check NPY allocations before NumPy materializes trusted-source payloads."""
+    with zipfile.ZipFile(path) as archive:
+        entries = archive.infolist()
+        require(len(entries) <= 256 and len({e.filename for e in entries}) == len(entries), 'NPZ 数组数量或名称无效')
+        total = 0
+        for entry in entries:
+            require(re.fullmatch(r'[-\w]+\.npy', entry.filename) is not None and not entry.flag_bits & 1, 'NPZ 数组路径无效')
+            if keys is not None and entry.filename[:-4] not in keys:
+                continue
+            total += entry.file_size
+            require(total <= 256 * 1024**2, 'NPZ 展开内容超过浏览器预算')
+            with archive.open(entry) as stream:
+                version = np.lib.format.read_magic(stream)
+                reader = {(1, 0): np.lib.format.read_array_header_1_0, (2, 0): np.lib.format.read_array_header_2_0}.get(version)
+                require(reader is not None, 'NPY 版本不支持')
+                shape, _, dtype = reader(stream, max_header_size=65536)
+                require(not dtype.hasobject and math.prod(shape) * dtype.itemsize == entry.file_size - stream.tell(),
+                        'NPY 分配大小与实际内容不一致')
+
+
 def validate_model(source, betas, expressions, flat_hand_mean):
     required = {'v_template': (10475, 3), 'posedirs': (10475, 3, 486),
                 'J_regressor': (55, 10475), 'weights': (10475, 55), 'kintree_table': (2, 55)}
+    validate_npz_budget(source, set(required) | {'shapedirs', 'f', 'hands_meanl', 'hands_meanr'})
     with np.load(source, allow_pickle=False) as model:
         for key, shape in required.items():
             value = model[key]
             require(value.shape == shape and np.isfinite(value).all(), f'模型数组维度或数值无效：{key}')
         shape = model['shapedirs']
         require(shape.ndim == 3 and shape.shape[:2] == (10475, 3)
-                and shape.shape[2] >= max(betas, 300 + expressions)
+                and shape.shape[2] >= (max(betas, 300 + expressions) if expressions else betas)
                 and np.isfinite(shape).all(), '模型形状或表情基底不足')
         faces = model['f']
         require(faces.ndim == 2 and faces.shape[1] == 3 and faces.dtype.kind in 'iu'
@@ -222,6 +245,11 @@ def write_playback_model(source, destination, betas, expressions, flat_hand_mean
 
 
 def visualization_readme(metadata, frames, duration_ns, world_frame):
+    matrix = metadata.get('representation') == 'smplx_local_rotations'
+    video_note = ('视频未烘焙 SMPL-X；Viewer 使用包内相机投影实时叠加。原画面中的真人保留。' if matrix
+                  else '视频中的 SMPL-X 人体已烘焙进 MP4，独立三维人体材质不会改变视频画面。')
+    model_note = ('包内模型与平台播放模型字节一致，保留源模型摘要；前向直接使用最终旋转矩阵。' if matrix
+                  else '包内模型仅保留本次动作使用的形状／表情基底，以及姿态修正、关节回归和蒙皮数据，不是通用完整模型。')
     videos = '\n'.join(f'    ├── {v["view_id"].lower()}.mp4  ({v["kind"]})' for v in metadata['videos'])
     quality = '通过' if metadata['physical_accuracy_passed'] else '未通过'
     return f'''# SynaExo 可视化包
@@ -251,7 +279,7 @@ videos/
 3. 使用底部时间轴播放、暂停和跳转；三维视图可拖动旋转、滚轮缩放。
 
 网页在浏览器本地读取，不上传文件，不需要 Python 或 S3 凭据。
-视频中的人体已烘焙进 MP4，独立三维人体材质不会改变视频画面。
+{video_note}
 动作 NPZ 保存时间戳、逐帧有效性和视频校验信息，不以默认 FPS 补齐数据。
 
 ## 模型与校验
@@ -259,7 +287,7 @@ videos/
 - 模型维数：{metadata['model']['num_betas']} 维体型、{metadata['model']['num_expression']} 维表情。
 - 包内模型 SHA-256：`{metadata['model']['sha256']}`
 - 原模型 SHA-256：`{metadata['model']['source_sha256']}`
-- 包内模型仅保留本次动作使用的形状／表情基底，以及姿态修正、关节回归和蒙皮数据，不是通用完整模型。
+- {model_note}
 - ZIP 的 SHA-256 见文件名；该摘要覆盖 README 和全部载荷。
 
 模型和录制仅按各自适用的许可范围分发，不将权重发布到公开仓库或 GitHub Pages。
@@ -319,25 +347,41 @@ def build(args, receipt, temp):
             and layer['units'] == 'm' and isinstance(layer['world_frame'], str)
             and layer['world_frame'] and type(layer['physical_accuracy_passed']) is bool,
             '结果身份、坐标系、单位或质检状态无效')
+    matrix = layer.get('delivery_profile') == 'parameters'
     frames = layer['frames']
     require(type(frames) is int and frames > 0, '人体结果帧数无效')
-    with np.load(receipt.get(layer['parameters']), allow_pickle=False) as saved:
+    parameters_path = receipt.get(layer['parameters'], limit=128 * 1024**2)
+    validate_npz_budget(parameters_path)
+    with np.load(parameters_path, allow_pickle=False) as saved:
         motion = {k: saved[k].copy() for k in saved.files}
     ts = motion['reference_timestamps_ns']
-    require(ts.dtype.kind in 'iu' and ts.shape == (frames,)
-            and all(abs(int(t)) <= SAFE_INTEGER for t in ts), '参数缺少精确逐帧时间')
+    require(ts.dtype.kind in 'iu' and ts.shape == (frames,), '参数缺少精确逐帧时间')
     origin = int(ts[0])
     times = timestamps([int(t) - origin for t in ts], frames, '主时间轴')
     require(str(motion['coordinate_frame'].item()) == layer['world_frame']
             and str(motion['units'].item()) == 'm', '参数坐标系与结果不一致')
     require(motion['flat_hand_mean'].dtype.kind == 'b' and motion['use_pca'].dtype.kind == 'b', '参数必须声明手部表示')
     flat, pca = bool(motion['flat_hand_mean'].item()), bool(motion['use_pca'].item())
-    require(not pca, 'Viewer 需要完整手部轴角参数，不支持 PCA 参数')
-    betas, expressions = motion['betas'].shape[-1], motion['expression'].shape[-1]
-    require(1 <= betas <= 300 and 1 <= expressions <= 100, '形状或表情参数维数超出 Viewer 范围')
-    widths = {'global_orient': 3, 'body_pose': 63, 'jaw_pose': 3, 'leye_pose': 3,
-              'reye_pose': 3, 'left_hand_pose': 45, 'right_hand_pose': 45,
-              'transl': 3, 'betas': betas, 'expression': expressions}
+    require(not pca, 'Viewer 不支持 PCA 手部参数，请提供完整轴角或最终旋转矩阵')
+    if matrix:
+        betas, expressions = 10, 0
+        require(flat and motion['betas'].shape in [(1, 10), (frames, 10)], '最终矩阵模型配置无效')
+        R = motion['joint_rotations']
+        require(R.shape == (frames, 55, 3, 3) and R.dtype == np.float32 and np.isfinite(R).all()
+                and np.allclose(R @ R.swapaxes(-1, -2), np.eye(3), atol=2e-5, rtol=0)
+                and np.allclose(np.linalg.det(R), 1, atol=2e-5, rtol=0), '最终旋转矩阵无效')
+        for key in ['hand_accepted', 'hand_view_count']:
+            a = motion[key]
+            require(a.shape == (frames, 2) and np.isfinite(a).all(), f'手部观测证据无效：{key}')
+        require(motion['hand_accepted'].dtype.kind == 'b' and motion['hand_view_count'].dtype.kind in 'iu'
+                and (motion['hand_view_count'] >= 0).all(), '手部有效性或观测数量无效')
+        widths = {'transl': 3, 'betas': 10}
+    else:
+        betas, expressions = motion['betas'].shape[-1], motion['expression'].shape[-1]
+        require(1 <= betas <= 300 and 1 <= expressions <= 100, '形状或表情参数维数超出 Viewer 范围')
+        widths = {'global_orient': 3, 'body_pose': 63, 'jaw_pose': 3, 'leye_pose': 3,
+                  'reye_pose': 3, 'left_hand_pose': 45, 'right_hand_pose': 45,
+                  'transl': 3, 'betas': betas, 'expression': expressions}
     for key, width in widths.items():
         a = motion[key]
         allowed = [(frames, width)] + ([(1, width), (width,)] if key in ('betas', 'expression') else [])
@@ -355,7 +399,14 @@ def build(args, receipt, temp):
     if 'model_sha256' in motion:
         require(str(motion['model_sha256'].item()) == source_model_sha, '模型与动作参数的摘要不一致')
     model_path = temp / 'smplx.npz'
-    model_sha = write_playback_model(args.model, model_path, betas, expressions, flat)
+    if matrix:
+        require('model_sha256' in motion and str(motion['model_sha256'].item()) == source_model_sha,
+                '最终参数缺少绑定模型摘要')
+        require(args.model.stat().st_size <= 256 * 1024**2, '模型超过浏览器预算')
+        shutil.copyfile(args.model, model_path)
+        model_sha = digest(model_path)
+    else:
+        model_sha = write_playback_model(args.model, model_path, betas, expressions, flat)
     motion['body_observed'] = body
     motion['model_sha256'] = np.array(model_sha)
     motion['source_model_sha256'] = np.array(source_model_sha)
@@ -363,8 +414,19 @@ def build(args, receipt, temp):
     pack.add('models/smplx.npz', model_path, 'smplx_playback_model')
     videos, ids, points, observed = [], set(), [], []
     counts = {'gopro': 0, 'ego': 0}
-    pre = receipt.json(layer['preprocessing'])
-    projections = layer['projections']
+    if matrix:
+        pre = receipt.json(layer['preview'])
+        proof = pre['model']
+        require(pre.get('format') == 'synaexo-parameter-preview-v1'
+                and pre['recording_id'] == source['recording_id']
+                and pre['parameters'] == layer['parameters'] and pre['world_frame'] == layer['world_frame']
+                and pre['clock_id'] == layer['clock_id'] and proof['model_sha256'] == model_sha
+                and proof['frames'] == frames and 0 <= proof['max_abs_vertex_error_m'] <= 0.00002
+                and proof['max_allowed_error_m'] == 0.00002, '参数预览配方与所选结果或恢复证明不一致')
+        projections = [{**c['proxy'], 'camera_id': c['camera_id'], 'frames': frames} for c in pre['cameras']]
+    else:
+        pre = receipt.json(layer['preprocessing'])
+        projections = layer['projections']
     require(1 <= len(projections) <= 16, '相机数量超出 Viewer 范围')
     for projection in projections:
         cid = projection['camera_id']
@@ -375,8 +437,10 @@ def build(args, receipt, temp):
         kind = poses[0]['kind']
         counts[kind] += 1
         view = ('EXO' if kind == 'gopro' else 'EGO') + str(counts[kind]).zfill(2)
-        mapping = receipt.named(cid + '-source-frames.npz')
-        with np.load(receipt.get(mapping), allow_pickle=False) as z:
+        mapping = poses[0]['frame_map'] if matrix else receipt.named(cid + '-source-frames.npz')
+        mapping_path = receipt.get(mapping, limit=128 * 1024**2)
+        validate_npz_budget(mapping_path)
+        with np.load(mapping_path, allow_pickle=False) as z:
             t, valid = z['reference_timestamps_ns'], z['source_observed']
             require(t.dtype.kind in 'iu' and t.shape == (frames,)
                     and [int(v) - origin for v in t] == times
@@ -390,14 +454,37 @@ def build(args, receipt, temp):
         dimensions = projection['image_size']
         require(len(dimensions) == 2 and all(type(v) is int and 0 < v <= 8192 for v in dimensions), f'视频分辨率无效：{cid}')
         path = projection['path']
-        require(path.endswith('.mp4'), f'已有叠加视频必须是 MP4：{cid}')
+        require(path.endswith('.mp4'), f'可视化视频必须是 MP4：{cid}')
         local = receipt.get(path)
-        pack.add(f'videos/{view.lower()}.mp4', local, 'baked_projection_video', receipt.files[path])
+        if matrix:
+            camera = poses[0]
+            cal = camera['calibration']
+            K = np.asarray(cal['K'], dtype=np.float64)
+            require(K.shape == (3, 3) and np.isfinite(K).all() and K[0, 0] > 0 and K[1, 1] > 0
+                    and np.array_equal(K[2], [0, 0, 1]),
+                    f'相机内参无效：{cid}')
+            require(isinstance(cal['image_size'], list) and len(cal['image_size']) == 2
+                    and all(type(v) is int and v > 0 for v in cal['image_size']), f'相机标定分辨率无效：{cid}')
+            width, height = cal['image_size']
+            K = np.diag([dimensions[0]/width, dimensions[1]/height, 1.]) @ K
+            transforms = np.asarray(camera['T_world_from_camera'], dtype=np.float64)
+            if transforms.shape == (4, 4): transforms = np.broadcast_to(transforms, (frames, 4, 4))
+            valid = np.asarray(camera['pose_valid'])
+            require(transforms.shape == (frames, 4, 4) and np.isfinite(transforms).all()
+                    and np.allclose(transforms[:, 3], [0, 0, 0, 1], atol=1e-6, rtol=0)
+                    and valid.shape == (frames,) and valid.dtype.kind == 'b', f'相机世界外参无效：{cid}')
+            i = len(videos)
+            motion[f'preview_camera_{i}_K'] = K
+            motion[f'preview_camera_{i}_poses'] = transforms
+            motion[f'preview_camera_{i}_pose_valid'] = valid
+        pack.add(f'videos/{view.lower()}.mp4', local, 'clean_proxy_video' if matrix else 'baked_projection_video', receipt.files[path])
         videos.append({'camera_id': cid, 'view_id': view, 'kind': kind,
-                       'image_size': dimensions, 'bytes': local.stat().st_size, 'sha256': digest(local)})
+                       'image_size': dimensions, 'bytes': local.stat().st_size, 'sha256': digest(local),
+                       'content': 'clean_proxy' if matrix else 'baked_projection'})
         points.append(pts)
     metadata = {'format': 'synaexo-visualization', 'schema_version': 1,
                 'recording_id': source['recording_id'], 'result_id': published['version'],
+                'representation': 'smplx_local_rotations' if matrix else 'smplx_axis_angle',
                 'physical_accuracy_passed': layer['physical_accuracy_passed'],
                 'model': {'sha256': model_sha, 'source_sha256': source_model_sha,
                           'bytes': model_path.stat().st_size, 'num_betas': betas, 'num_expression': expressions},
@@ -408,7 +495,8 @@ def build(args, receipt, temp):
     motion_path = temp / 'preview-motion.npz'
     np.savez_compressed(motion_path, **motion)
     require(motion_path.stat().st_size <= 128 * 1024**2, '动作参数超过浏览器预算')
-    pack.add('motions/subject_01/smplx_parameters.npz', motion_path, 'smplx_axis_angle')
+    validate_npz_budget(motion_path)
+    pack.add('motions/subject_01/smplx_parameters.npz', motion_path, metadata['representation'])
     readme = temp / 'README.md'
     readme.write_text(visualization_readme(metadata, frames, times[-1], layer['world_frame']), encoding='utf-8')
     pack.add('README.md', readme, 'readme')
@@ -479,7 +567,7 @@ def main(with_delivery=False):
     group.add_argument('--csv', type=Path, help='结果索引 CSV；配合 --recording-id 使用')
     parser.add_argument('--result-manifest', help='旧回执联合导出时，补充同一 run 的标准 synaexo_result 清单')
     parser.add_argument('--recording-id', help='CSV 中完整、唯一的录制 ID')
-    parser.add_argument('--model', type=Path, required=True, help='对应完整模型 NPZ：校验后将本次回放所需数组装入 models/smplx.npz')
+    parser.add_argument('--model', type=Path, required=True, help='对应完整模型 NPZ；新矩阵结果原字节复制，既有轴角结果按维数准备')
     parser.add_argument('--output-dir', type=Path, required=True, help='导出目录；联合模式生成含 delivery/ 和可视化 ZIP 的独立子目录')
     parser.add_argument('--with-delivery', action='store_true', default=with_delivery,
                         help='同时生成该 run 的数据交付包，与可视化 ZIP 放在同一个独立目录')

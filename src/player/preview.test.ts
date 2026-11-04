@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import type { NdArray, NumericArray } from "../smplx/npy";
+import type { NdArray, NumericArray } from "../../core/npy";
 import { readPreview } from "./preview";
 
 const array = (shape: number[], data: NumericArray | string[]): NdArray => ({
@@ -14,6 +14,7 @@ function preview() {
   arrays.betas = array([1, 1], new Float32Array(1));
   arrays.expression = array([2, 1], new Float32Array(2));
   arrays.reference_timestamps_ns = array([2], new Float64Array([2 ** 40, 2 ** 40 + 33_333_333]));
+  arrays.reference_timestamps_ns.dtype = "<i8";
   arrays.flat_hand_mean = array([], new Int32Array([1]));
   arrays.use_pca = array([], new Int32Array([0]));
   arrays.coordinate_frame = array([], ["synthetic"]);
@@ -70,5 +71,27 @@ test("rejects guessed or imprecise video timing and fabricated validity", () => 
   arrays.preview_source_observed.data[2] = 2;
   expect(() => readPreview(arrays)).toThrow("逐帧有效性");
   arrays.reference_timestamps_ns.data[1] = 2 ** 53;
-  expect(() => readPreview(arrays)).toThrow("主时间轴");
+  expect(() => readPreview(arrays)).toThrow("时间证据");
+});
+
+test("matrix preview carries calibrated projections and cannot disguise clean proxies as baked videos", () => {
+  const { arrays, metadata, update } = preview();
+  Object.assign(metadata, {representation:"smplx_local_rotations"});
+  metadata.model.num_betas=10;metadata.model.num_expression=0;
+  arrays.betas=array([1,10],new Float32Array(10));
+  const R=new Float32Array(2*55*9);
+  for(let i=0;i<R.length;i+=9)R[i]=R[i+4]=R[i+8]=1;
+  arrays.joint_rotations=array([2,55,3,3],R);
+  arrays.hand_accepted=array([2,2],new Int32Array(4));arrays.hand_view_count=array([2,2],new Int32Array(4));
+  for(let i=0;i<2;i++){
+    Object.assign(metadata.videos[i],{content:"clean_proxy"});
+    arrays[`preview_camera_${i}_K`]=array([3,3],new Float64Array([30,0,32,0,30,32,0,0,1]));
+    arrays[`preview_camera_${i}_poses`]=array([2,4,4],new Float64Array([1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1,1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]));
+    arrays[`preview_camera_${i}_pose_valid`]=array([2],new Int32Array([1,0]));
+  }
+  update();const p=readPreview(arrays);
+  expect(p.cameras[0].baked).toBe(false);expect(p.cameras[0].K?.[0][0]).toBe(30);
+  expect(p.cameras[1].pose_valid).toEqual([true,false]);
+  delete arrays.preview_camera_0_K;expect(()=>readPreview(arrays)).toThrow("preview_camera_0_K");
+  Object.assign(metadata.videos[0],{content:undefined});update();expect(()=>readPreview(arrays)).toThrow("必须声明");
 });

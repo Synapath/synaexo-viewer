@@ -1,6 +1,6 @@
 # 可视化包
 
-可视化 ZIP 是单次 run 交付结果旁的可选测试附件。交付结果只导出所选 run 的结果数据，不包含可视化；原始素材、多次结果及处理证据属于平台存储。Viewer 读取可视化包，在浏览器内执行 SMPL-X 前向并同步播放已有叠加的视频。
+可视化 ZIP 是单次 run 交付结果旁的可选测试附件。交付结果包含所选 run 的人体结果、对应原片、冻结内外参、相机轨迹和同步。Viewer 读取额外可视化 ZIP，在浏览器 Worker 内执行 SMPL-X 前向，并按同一主时间轴显示各路视频。
 
 ## 包内结构
 
@@ -22,7 +22,7 @@ syanexo-<ZIP 的完整 SHA-256>.zip
 
 ## 打包脚本
 
-[`tools/package_recording.py`](tools/package_recording.py) 的 `build` 从已发布的 S3 回执选取一个结果，校验参数、逐帧时间和有效性，复制已有叠加视频。视频保持原字节，不执行算法或转码。脚本读取的来源证据用于校验，不随可视化 ZIP 分发。
+[`tools/package_recording.py`](tools/package_recording.py) 的 `build` 从已发布的 S3 回执选取一个结果，校验参数、逐帧时间和有效性，复制配方明确引用的代理视频，或既有结果的叠加视频。视频保持原字节，不执行算法或转码。脚本读取的来源证据用于校验，不随可视化 ZIP 分发。
 
 打包端需要 Python 3.10+；浏览器播放不需要 Python。在仓库根目录安装依赖：
 
@@ -31,7 +31,7 @@ python3 -m venv /tmp/synaexo-package-venv
 /tmp/synaexo-package-venv/bin/python -m pip install -r tools/requirements-package.txt
 ```
 
-将示例地址替换为真实值；`--model` 指定计算结果对应、已获许可的完整模型，用于验证并生成包内回放模型：
+将示例地址替换为真实值；`--model` 指定计算结果对应、已获许可的完整模型，用于验证结果模型身份并准备包内回放模型：
 
 ```sh
 /tmp/synaexo-package-venv/bin/python tools/package_recording.py --manifest s3://BUCKET/RESULT/manifest.json --model /path/to/SMPLX_NEUTRAL.npz --output-dir /path/to/attachments
@@ -100,7 +100,7 @@ synaexo-delivery-<内容摘要>/                    # 整套文件路径与摘�
     ├── README.md                              # 打开步骤、模型身份与源质检
     ├── models/smplx.npz                        # 本次回放所需模型
     ├── motions/subject_01/smplx_parameters.npz  # 动作数组与播放时间/有效性/身份
-    └── videos/                                # 既有烘焙人体的视频，原字节复制
+    └── videos/                                # 新参数结果的代理视频；既有叠加视频仍按原字节复制
         ├── exo01.mp4                           # 实际 EXO 机位按两位序号提供
         └── ego01.mp4                           # 实际存在的 EGO 视角
 ```
@@ -113,7 +113,12 @@ synaexo-delivery-<内容摘要>/                    # 整套文件路径与摘�
 
 ## 动作 NPZ 与播放信息
 
-原有轴角动作数组保留，包括人体、双手、面部、平移、形状和表情参数，以及 `reference_timestamps_ns`、`coordinate_frame`、`units`、`flat_hand_mean`、`use_pca`。要求米制坐标、完整轴角和 `use_pca: false`，不以默认 FPS、坐标轴或手部均值补齐证据。
+来源支持两种表示：
+
+- `delivery_profile: parameters`：从 `layer.preview` 的 `synaexo-parameter-preview-v1` 配方读取最终 `joint_rotations[N,55,3,3]` float32 矩阵、10 维体型、平移、人体／双手有效性及观测数量；保留矩阵原值，使用 `flat_hand_mean: true`、`use_pca: false`，表情系数为零，与发布前向一致。配方绑定模型摘要、run、时钟、世界坐标及已验证代理视频。可视化 NPZ 补充投影所需信息，不要求 `layer.projections`。
+- 既有轴角结果：保留完整人体、双手、面部、平移、形状和表情参数，读取已有叠加视频，沿用显式手部均值配置。
+
+两者均保留 `reference_timestamps_ns`、`coordinate_frame`、`units`、`flat_hand_mean`、`use_pca`。要求米制坐标，不以默认 FPS、坐标轴或手部均值补齐证据。绝对 int64 纳秒在浏览器中先以 BigInt 减原点，再将安全相对值转换为 number。完整交付中的源 NPZ 保持原始字节；新增播放数组只写入可视化 ZIP。
 
 打包器在同一个 NPZ 内补充以下数组；解析及维度检查以 [`readPreview`](src/player/preview.ts) 为准：
 
@@ -125,16 +130,19 @@ synaexo-delivery-<内容摘要>/                    # 整套文件路径与摘�
 | `preview_metadata` | JSON 字符串标量，记录格式、录制和结果 ID、源质检状态、模型维数，以及各路视频的身份、类型、分辨率、大小和摘要 |
 | `preview_video_pts_ns` | `[V,N]` 各路 MP4 的相对纳秒 PTS |
 | `preview_source_observed` | `[V,N]` 各路视频逐帧来源有效性 |
+| `preview_camera_<i>_K` | 新代理视频的 `[3,3]` 内参，按实际代理尺寸缩放 |
+| `preview_camera_<i>_poses` | `[N,4,4]` camera-to-world 变换，静态外参逐帧展开 |
+| `preview_camera_<i>_pose_valid` | `[N]` 相机位姿有效性 |
 
 主时间轴和视频 PTS 必须精确、严格递增，并在解析器允许的容器时间基误差内一致。人体部分缺失时需要逐帧 mask；仅在来源明确声明全帧有效时才能由总数生成全有效 mask。缺失观测不会当作有效数据，源 `physical_accuracy_passed` 状态保持不变。
 
-包内视频均已烘焙人体，直接显示原画面，不重复投影。三维人体在 Worker 中由动作参数生成，不需要相机标定。
+`preview_metadata.representation` 声明动作表示；每路视频的 `content` 为 `clean_proxy` 或 `baked_projection`。新代理视频未烘焙 SMPL-X，原画面中的真人仍在；Viewer 使用内嵌 K／世界外参实时投影，且只在人体、来源和位姿均有效时显示。既有叠加视频直接显示原画面，不重复投影。
 
 ## 包内模型
 
-Viewer 自动读取 `models/smplx.npz`，无需再选择模型。打包器保留本次动作使用的体型和表情基底，以及完整的姿态修正、关节回归、蒙皮和所需手部均值；表情基底仍从索引 300 开始。源模型摘要与实际包内模型摘要分别保存，并在读取时核对包内模型的大小和 SHA-256。
+Viewer 自动读取 `models/smplx.npz`，无需再选择模型。新矩阵结果复制与发布证明 SHA-256 一致的完整源模型，模型与平台播放资源字节相同，不裁剪或重新打包；Worker 只读取需要的数组。既有轴角结果仍生成本次维数的紧凑模型，保留姿态修正、回归、蒙皮和所需手部均值，表情基底仍从索引 300 开始。
 
-该模型仅用于本包声明的参数维数，不作为通用完整模型。模型和录制按适用许可在获授权的范围内分发；真实 ZIP 和模型权重不提交到公开仓库或 GitHub Pages，参见 [SMPL-X 模型许可](https://smpl-x.is.tue.mpg.de/modellicense.html)。
+包内模型和源模型摘要分别保存，读取时核对大小和 SHA-256。模型和录制按适用许可在获授权范围内分发；真实 ZIP 和模型权重不提交到公开仓库或 GitHub Pages，参见 [SMPL-X 模型许可](https://smpl-x.is.tue.mpg.de/modellicense.html)。
 
 已发布的无模型旧包仍支持独立导入模型并复用 IndexedDB 缓存。缓存按同一浏览器、同一站点的模型摘要区分，不是新包打开的前置条件。
 

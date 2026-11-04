@@ -1,5 +1,5 @@
 import { sha256 } from "@noble/hashes/sha256";
-import { parseNpz } from "../smplx/npy";
+import { parseNpz } from "./npy";
 
 export class MissingModel extends Error {
   readonly hash: string;
@@ -50,4 +50,46 @@ export async function importModel(file: File, signal: AbortSignal, expected?: st
   await request("readwrite", store => store.put(bytes, hash));
   signal.throwIfAborted();
   return hash;
+}
+
+export type VerifiedAsset = { url: string; bytes: number; sha256: string };
+export async function fetchVerified(asset: VerifiedAsset, signal: AbortSignal, limit = 256 * 1024 ** 2) {
+  const url = new URL(asset.url, location.href);
+  if (url.origin !== location.origin || !Number.isSafeInteger(asset.bytes) || asset.bytes < 1 || asset.bytes > limit
+    || !/^[a-f0-9]{64}$/.test(asset.sha256)) throw new Error("参数资源身份或大小无效");
+  const response = await fetch(url, { signal, credentials: "same-origin", redirect: "error" });
+  if (!response.ok || !response.body) throw new Error("参数资源读取失败，请重试");
+  const reader = response.body.getReader(), chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > asset.bytes) throw new Error("参数资源超出声明大小");
+      chunks.push(value);
+    }
+  } finally { await reader.cancel(); }
+  signal.throwIfAborted();
+  if (size !== asset.bytes) throw new Error("参数资源大小不符");
+  const bytes = new Uint8Array(size); let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+  if (sha256Hex(bytes.buffer) !== asset.sha256) throw new Error("参数资源 SHA-256 校验失败");
+  return bytes.buffer;
+}
+export async function loadModel(asset: VerifiedAsset, signal: AbortSignal) {
+  if (new URL(asset.url, location.href).origin !== location.origin || !Number.isSafeInteger(asset.bytes)
+    || asset.bytes < 1 || asset.bytes > 256 * 1024 ** 2 || !/^[a-f0-9]{64}$/.test(asset.sha256))
+    throw new Error("模型资源身份或大小无效");
+  try {
+    const cached = await cachedModel(asset.sha256, signal);
+    if (cached.byteLength !== asset.bytes) throw new Error("模型缓存大小不符");
+    return cached;
+  }
+  catch { signal.throwIfAborted(); }
+  const bytes = await fetchVerified(asset, signal);
+  // Storage can be unavailable in private browsing; integrity is still mandatory.
+  try { await request("readwrite", store => store.put(bytes, asset.sha256)); } catch { /* best-effort cache */ }
+  signal.throwIfAborted();
+  return bytes;
 }

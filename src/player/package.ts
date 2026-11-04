@@ -1,9 +1,9 @@
 import { sha256 } from "@noble/hashes/sha256";
 import { RecordingArchive, safeEntryPath } from "../lib/archive";
-import { ForwardEngine } from "./engine";
-import { parseNpz } from "../smplx/npy";
+import { ForwardEngine } from "../../core/engine";
+import { parseNpz } from "../../core/npy";
 import { readPreview } from "./preview";
-import { cachedModel, sha256Hex } from "./models";
+import { cachedModel, sha256Hex } from "../../core/models";
 
 export type Camera = {
   camera_id: string;
@@ -371,12 +371,12 @@ export async function prepareRecording(
       if (sha256Hex(await blob.arrayBuffer()) !== video.sha256) throw new Error(`视频校验失败：${video.path}`);
       signal.throwIfAborted();
       const url = URL.createObjectURL(blob); urls.push(url);
-      cameras.push({ ...video, url, baked: true });
+      cameras.push({ ...video, url });
     }
     const initialized = await engine.init(model, motionBuffer, [], parsed.contract);
     signal.throwIfAborted();
     signal.removeEventListener("abort", abort);
-    return { frames: parsed.contract.frames, relative_timestamps_ns: parsed.contract.times,
+    return { frames: parsed.contract.frames, relative_timestamps_ns: initialized.times,
       world_frame: parsed.contract.worldFrame, body_observed: parsed.body, faces: initialized.faces,
       cameras, engine, qualityPassed: parsed.qualityPassed,
       dispose() { engine.dispose(); urls.forEach(URL.revokeObjectURL); archive.close(); } };

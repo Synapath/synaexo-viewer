@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
-import { loadMotion, type MotionContract } from "./motion";
-import { SmplxModel } from "../smplx/smplxModel";
-import type { NdArray, NumericArray } from "../smplx/npy";
+import { loadMotion, type MotionContract } from "../../core/motion";
+import { SmplxModel } from "../../core/smplxModel";
+import type { NdArray, NumericArray } from "../../core/npy";
 const array = (shape: number[], data: NumericArray | string[]): NdArray => ({
   dtype: "<f4",
   shape,
@@ -30,6 +30,7 @@ function clip() {
     [2],
     new Float64Array([2 ** 40, 2 ** 40 + 41_000_000]),
   );
+  arrays.reference_timestamps_ns.dtype = "<i8";
   arrays.flat_hand_mean = array([], new Int32Array([1]));
   arrays.use_pca = array([], new Int32Array([0]));
   arrays.coordinate_frame = array([], ["test_world"]);
@@ -84,4 +85,28 @@ test("rejects time or coordinate evidence mismatches instead of assuming an FPS 
   expect(() =>
     loadMotion(arrays, { ...contract, worldFrame: "another_world" }),
   ).toThrow("坐标系");
+});
+
+test("final matrices stay exact, retain masks and subtract the int64 origin before conversion", () => {
+  const { arrays, contract } = clip();
+  const R = new Float32Array(2 * 55 * 9);
+  for (let i = 0; i < R.length; i += 9) R[i] = R[i + 4] = R[i + 8] = 1;
+  R.set([0,-1,0,1,0,0,0,0,1], 9);
+  arrays.joint_rotations = array([2,55,3,3], R);
+  arrays.betas = array([1,10], new Float32Array(10));
+  arrays.body_observed = array([2], new Int32Array([1,0]));
+  arrays.hand_accepted = array([2,2], new Int32Array([1,0,0,0]));
+  arrays.hand_view_count = array([2,2], new Int32Array([2,0,0,0]));
+  arrays.reference_timestamps_ns.int64 = new BigInt64Array([2n**60n+123n,2n**60n+41_000_123n]);
+  arrays.model_sha256 = array([], ["a".repeat(64)]);
+  const c: MotionContract = {...contract, representation:"smplx_local_rotations", numBetas:10, numExpression:0, referenceOrigin:String(2n**60n+123n), modelSha256:"a".repeat(64)};
+  const motion = loadMotion(arrays,c);
+  let rotations: Float32Array | undefined;
+  const model = {forward: (params:{rotations:Float32Array}) => { rotations=params.rotations;return new Float32Array(3); }} as unknown as SmplxModel;
+  expect(motion.referenceOrigin).toBe(String(2n**60n+123n));expect(motion.times).toEqual([0,41_000_000]);
+  expect([...motion.frame(model,0)]).toEqual([5,6,7]);expect(rotations).toEqual(R.slice(0,495));
+  R[0] = -1;
+  expect(()=>loadMotion(arrays,c)).toThrow("方向");
+  R[0] = 1;arrays.hand_accepted.data[0]=2;
+  expect(()=>loadMotion(arrays,c)).toThrow("有效性");
 });
