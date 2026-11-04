@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { LoaderCircle, Pause, Play } from "lucide-react";
+import { LoaderCircle, Maximize2, Minimize2, Pause, Play } from "lucide-react";
 import type { Recording } from "./package";
 import { createScene } from "./scene";
 import { startPlayback } from "./playback";
@@ -20,6 +20,8 @@ export default function Player({
     nodes = useRef<HTMLDivElement>(null),
     tiles = useRef<(HTMLDivElement | null)[]>([]);
   const playback = useRef<ReturnType<typeof startPlayback> | null>(null);
+  const [focused, setFocused] = useState<number | null>(null);
+  const focusButtons = useRef<(HTMLButtonElement | null)[]>([]);
   const [state, setState] = useState({
     frame: 0,
     busy: true,
@@ -58,8 +60,19 @@ export default function Player({
   useEffect(() => {
     if (suspended) playback.current?.pause();
   }, [suspended]);
+  useEffect(() => {
+    if (focused === null) return;
+    function restore(event: KeyboardEvent) {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      event.preventDefault();
+      setFocused(null);
+      focusButtons.current[focused!]?.focus();
+    }
+    window.addEventListener("keydown", restore);
+    return () => window.removeEventListener("keydown", restore);
+  }, [focused]);
   const names = ["SMPL-X", ...recording.cameras.map((c) => c.view_id)],
-    columns = viewColumns(names.length);
+    columns = focused === null ? viewColumns(names.length) : 1;
   const gridStyle = {
     "--columns": columns,
     "--medium-columns": Math.min(3, columns),
@@ -72,24 +85,45 @@ export default function Player({
       data-frame={state.frame}
       data-busy={state.busy}
       data-playing={state.playing}
+      data-focused-view={focused === null ? "" : names[focused]}
     >
       <div className="player-grid" ref={host} style={gridStyle}>
         {names.map((name, i) => (
-          <div className="player-tile" key={name}>
+          <div
+            className="player-tile"
+            key={name}
+            hidden={focused !== null && focused !== i}
+          >
             <div className="tile-heading">
               <span title={i ? recording.cameras[i - 1].camera_id : undefined}>
                 {name}
               </span>
-              {i > 0 &&
-                !recording.cameras[i - 1].source_observed[state.frame] && (
-                  <span>缺帧</span>
-                )}
+              <div className="tile-actions">
+                {i > 0 &&
+                  !recording.cameras[i - 1].source_observed[state.frame] && (
+                    <span>缺帧</span>
+                  )}
+                <button
+                  ref={(button) => { focusButtons.current[i] = button; }}
+                  className="icon-button"
+                  aria-label={focused === i ? "恢复宫格" : `放大 ${name}`}
+                  title={focused === i ? "恢复宫格 (Esc)" : `放大 ${name}`}
+                  aria-pressed={focused === i}
+                  onClick={() => setFocused(focused === i ? null : i)}
+                >
+                  {focused === i ? <Minimize2 /> : <Maximize2 />}
+                </button>
+              </div>
             </div>
             <div
               ref={(node) => {
                 tiles.current[i] = node;
               }}
               className="player-viewport"
+              onDoubleClick={() => {
+                setFocused(focused === i ? null : i);
+                focusButtons.current[i]?.focus();
+              }}
             />
           </div>
         ))}

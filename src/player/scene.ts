@@ -203,6 +203,7 @@ export function createScene(
   }
   const observer = new ResizeObserver(resize);
   observer.observe(host);
+  tiles.forEach((tile) => observer.observe(tile));
   controls.addEventListener("change", draw);
   resize();
   return {

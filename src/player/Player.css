@@ -33,16 +33,26 @@
   border-radius: 0;
   overflow: hidden;
 }
+.player-tile[hidden] {
+  display: none;
+}
 .tile-heading {
   position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
   background: #181818;
-  padding: 8px 12px;
+  padding: 0 8px 0 12px;
+  min-height: 36px;
   font-size: 12px;
   color: var(--muted);
   gap: 12px;
+  flex: none;
+}
+.tile-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   flex: none;
 }
 .player-viewport {
@@ -127,6 +137,6 @@
     white-space: normal;
   }
   .tile-heading {
-    padding: 8px;
+    padding: 0 4px 0 8px;
   }
 }
