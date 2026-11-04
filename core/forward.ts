@@ -77,7 +77,7 @@ export async function createForward(modelBuffer: ArrayBuffer, motionBuffer: Arra
   const motion = loadMotion(motionArrays, c);
   const observed: boolean[][] = [];
   for (const buffer of maps) {
-    const map = await parseNpz(new Uint8Array(buffer));
+    const map = await parseNpz(new Uint8Array(buffer), new Set(["reference_timestamps_ns", "source_observed"]));
     const timeline = readTimeline(map.reference_timestamps_ns, c.frames);
     if (timeline.referenceOrigin !== motion.referenceOrigin || timeline.times.some((t, i) => t !== motion.times[i]))
       throw new Error("相机观测与主时间轴不一致");
