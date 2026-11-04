@@ -32,11 +32,11 @@ SynaExo Viewer 是独立的静态回放页面。拖入一个 ZIP 录制包，即
 3. 页面自动读取包内模型和动作参数，无需另行导入模型。
 4. 使用底部时间轴控制同步回放，在三维视图中拖动旋转、滚轮缩放。
 
-三维人体显示为不透明白色，EXO／EGO 视频保留已烘焙的原画面。可视化 ZIP 包含 `README.md`、`models/`、`motions/` 和 `videos/`，格式和时间要求见 [可视化包](PACKAGE.md)。
+三维人体显示为不透明白色。新参数结果使用未烘焙 SMPL-X 的代理视频，在浏览器实时投影；既有叠加视频保留原画面。可视化 ZIP 包含 `README.md`、`models/`、`motions/` 和 `videos/`，格式和时间要求见 [可视化包](PACKAGE.md)。
 
 需要从 SynaExo 已发布的 S3 结果准备录制包时，使用 [打包脚本](PACKAGE.md#打包脚本)。Python 和对象存储凭据仅在打包端准备；包内已附本次回放所需的模型。
 
-需要同时交付结果数据时，使用[联合导出脚本](PACKAGE.md#联合导出)，一次生成同一 run 的完整数据包和独立可视化 ZIP。数据包携带原始视频、冻结内外参、相机轨迹、同步与人体结果；可视化 ZIP 携带回放模型和已烘焙视频。
+需要同时交付结果数据时，使用[联合导出脚本](PACKAGE.md#联合导出)，一次生成同一 run 的完整数据包和独立可视化 ZIP。数据包携带原始视频、冻结内外参、相机轨迹、同步与人体结果；可视化 ZIP 携带同一 run 的模型、动作与视频；新矩阵结果无需重烘焙视频。
 
 ## 本地开发
 
@@ -62,8 +62,8 @@ npm run build
 | 路径 | 内容 |
 | --- | --- |
 | [`src/App.tsx`](src/App.tsx) | 录制包导入、切换与关闭 |
-| [`src/player`](src/player) | 三维场景、多视角布局、同步播放与计算 Worker |
-| [`src/smplx`](src/smplx) | SMPL-X 前向与 NPY／NPZ 解析 |
+| [`src/player`](src/player) | 三维场景、多视角布局、ZIP 适配与同步播放 |
+| [`core`](core) | 平台与独立 Viewer 共用的 NPY／NPZ、动作、SMPL-X 前向与 Worker |
 | [`src/lib/archive.ts`](src/lib/archive.ts) | ZIP 按条目读取与 CRC 校验 |
 | [`tools/package_recording.py`](tools/package_recording.py) | 从已发布结果生成录制包 |
 | [`tools/export_delivery.py`](tools/export_delivery.py) | 联合导出单个 run 的完整数据包与可视化 ZIP |
@@ -71,9 +71,15 @@ npm run build
 | [`public`](public) | 品牌资源与依赖许可清单 |
 | [`docs`](docs) | 静态构建产物 |
 
+## 共用计算核心
+
+平台通过固定 Git 提交依赖本仓库，导入 `synaexo-viewer/core/engine`；Vite 将同一 `core/forward.worker.ts` 编译为独立 Worker。`core/motion.ts` 同时支持已发布轴角包和新的最终局部旋转矩阵，矩阵输入保留原值，不转回轴角。核心与 ZIP 加载器分离，平台从版本受控接口取资源，独立 Viewer 只读本地 ZIP。
+
+平台加载模型时校验 SHA-256，并按摘要使用浏览器缓存。新参数 ZIP 的模型与平台模型字节相同；ZIP 不依赖在线缓存。完整交付和可视化导出字段见 [PACKAGE.md](PACKAGE.md#动作-npz-与播放信息)。
+
 ## GitHub Pages
 
-推送 `main` 后，[Pages 工作流](.github/workflows/pages.yml)执行打包脚本测试、前端测试、lint 和构建，全部通过后自动发布。运行结果与部署记录见 [GitHub Actions](https://github.com/Synapath/synaexo-viewer/actions/workflows/pages.yml)。仓库 Settings → Pages 的发布来源使用 **GitHub Actions**。
+推送 `main` 后，[Pages 工作流](.github/workflows/pages.yml)执行打包脚本测试、前端测试、lint 和构建，全部通过后自动发布。PR 执行相同检查，跳过 Pages 上传和部署。运行结果与部署记录见 [GitHub Actions](https://github.com/Synapath/synaexo-viewer/actions/workflows/pages.yml)。仓库 Settings → Pages 的发布来源使用 **GitHub Actions**。
 
 `npm run build` 将静态文件输出到 `docs/`，资源使用相对路径，依赖随构建产物分发，可部署到项目子路径。`docs/` 为生成目录，修改源码后重建并随源码提交，不手工编辑生成文件。
 

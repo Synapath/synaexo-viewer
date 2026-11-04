@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { parseNpy } from "./npy";
+import { parseNpy } from "../../core/npy";
 function npy(
   dtype: string,
   shape: number[],
@@ -36,4 +36,11 @@ test("restores Fortran column-major shape bases to row-major and rejects truncat
   expect(() => parseNpy(npy("<f4", [2, 3], bytes.slice(0, -1), true))).toThrow(
     "长度无效",
   );
+});
+
+test("keeps double precision calibration values and exact absolute int64 clocks", () => {
+  const value = 12345.123456789;
+  expect(parseNpy(npy("<f8", [1], new Uint8Array(new Float64Array([value]).buffer))).data[0]).toBe(value);
+  const exact = new BigInt64Array([2n**60n+123n,2n**60n+33_333_456n]);
+  expect(parseNpy(npy("<i8", [2], new Uint8Array(exact.buffer)), true).int64).toEqual(exact);
 });

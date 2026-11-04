@@ -6,17 +6,13 @@
   "scripts": {
     "dev": "vite",
     "build": "node tools/write-licenses.mjs && tsc -b && vite build",
-    "lint": "oxlint src tools vite.config.ts --deny-warnings",
+    "lint": "oxlint src core tools vite.config.ts --deny-warnings",
     "preview": "vite preview",
     "test": "vitest run"
   },
   "dependencies": {
     "@noble/hashes": "^1.8.0",
-    "@zip.js/zip.js": "^2.24.0",
-    "lucide-react": "^1.66.0",
-    "react": "^19.3.1",
-    "react-dom": "^19.3.1",
-    "three": "^0.160.0"
+    "@zip.js/zip.js": "^2.24.0"
   },
   "devDependencies": {
     "@types/node": "^24.19.2",
@@ -27,6 +23,26 @@
     "oxlint": "^1.89.0",
     "typescript": "~7.0.2",
     "vite": "^8.3.5",
-    "vitest": "^4.1.12"
-  }
+    "vitest": "^4.1.12",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "three": "^0.160.0",
+    "lucide-react": "^1.66.0"
+  },
+  "exports": {
+    "./core/engine": "./core/engine.ts",
+    "./core/npy": "./core/npy.ts",
+    "./core/motion": "./core/motion.ts",
+    "./core/models": "./core/models.ts",
+    "./core/forward": "./core/forward.ts",
+    "./core/smplxModel": "./core/smplxModel.ts"
+  },
+  "files": [
+    "core",
+    "licenses",
+    "tools/package_recording.py",
+    "tools/export_delivery.py",
+    "tools/delivery_bundle.py",
+    "tools/requirements-package.txt"
+  ]
 }

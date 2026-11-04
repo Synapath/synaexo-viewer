@@ -12,7 +12,7 @@ import numpy as np
 from botocore.response import StreamingBody
 
 from package_recording import (Package, Receipt, build, digest, public_metadata, publish_delivery,
-                              safe_path, select_source, storage_client, timestamps)
+                              safe_path, select_source, storage_client, timestamps, validate_npz_budget)
 
 
 class MemoryS3:
@@ -39,6 +39,15 @@ class PackagingTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 timestamps(values, 2, 'test')
         self.assertEqual(timestamps([0, 33_333_333], 2, 'test'), [0, 33_333_333])
+
+    def test_forged_npy_allocation_is_rejected_before_numpy_loads_it(self):
+        out = io.BytesIO()
+        np.lib.format.write_array_header_1_0(out, dict(descr='<f4', fortran_order=False, shape=(10**12, 3)))
+        path = self.root / 'forged.npz'
+        with zipfile.ZipFile(path, 'w') as archive:
+            archive.writestr('joint_rotations.npy', out.getvalue())
+        with self.assertRaisesRegex(ValueError, '分配大小'):
+            validate_npz_budget(path)
 
     def test_csv_requires_unique_full_recording_id(self):
         path = self.root / 'index.csv'
