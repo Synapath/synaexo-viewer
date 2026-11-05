@@ -51,6 +51,16 @@ Boto3 沿用 AWS 凭据链。S3 兼容服务可指定 `--endpoint-url` 和 `--ad
 /tmp/synaexo-package-venv/bin/python -m unittest discover -s tools -p 'test_*.py'
 ```
 
+## 导出索引
+
+两种导出入口都会在 `--output-dir` 下自动生成或更新 `synaexo-index.csv`，列为「录制名称」「录制ID」「run ID」「ZIP文件名」。索引使用 UTF-8 BOM 编码，可直接查看中文；JSON 报告的 `recording_name` 和 `index` 分别返回名称与索引路径。
+
+名称按 `--recording-name`、输入 CSV 的「录制」列、标准录制根清单的 `name` 顺序选取。旧回执可读取 `recording_name`；来源没有名称时该列留空，并在标准错误提示使用 `--recording-name` 补充。
+
+索引在导出成功后累计记录，按 ZIP 相对路径更新，同一 ZIP 重试不重复加行，不同 run 或不同内容的 ZIP 分别保留。单独导出时记录 ZIP 文件名；联合导出时记录 `synaexo-delivery-<内容摘要>/syanexo-<ZIP摘要>.zip`，相对于索引所在目录。索引保存在 ZIP 和联合交付目录之外，不改变它们的内容摘要。
+
+打包失败不增加索引记录。索引更新使用文件锁和原子替换；已有索引格式错误或写入失败时保留原文件，并报告已生成 ZIP 的位置，修复后可重试。
+
 ## 联合导出
 
 [`tools/export_delivery.py`](tools/export_delivery.py) 一次导出一个 run 的完整数据包和旁边的可视化 ZIP，交付格式为 `v1.0.0`。三份 Python 文件 `export_delivery.py`、`package_recording.py`、`delivery_bundle.py` 须放在同一目录，依赖仍使用 `tools/requirements-package.txt`。

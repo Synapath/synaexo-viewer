@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Build a local Viewer ZIP from a published S3 receipt."""
 import argparse
+from contextlib import contextmanager
 import csv
 import hashlib
 import json
@@ -47,7 +48,82 @@ def select_source(csv_path, recording_id):
     with Path(csv_path).open(encoding='utf-8-sig', newline='') as stream:
         rows = [r for r in csv.DictReader(stream) if r.get('recording_id') == recording_id]
     require(len(rows) == 1, f'CSV 中录制 ID 必须唯一匹配：{recording_id}')
-    return rows[0]['S3清单'], rows[0].get('录制', recording_id)
+    return rows[0]['S3清单'], rows[0].get('录制', '')
+
+
+def recording_name(receipt, supplied=None, csv_name=None, delivery_plan=None):
+    for name in (supplied, csv_name):
+        if name and name.strip():
+            return name.strip()
+    field = 'name'
+    if delivery_plan is not None:
+        root = delivery_plan.recording
+    elif receipt.standard and receipt.document.get('recording_manifest'):
+        reference = receipt.document['recording_manifest']
+        require(reference['path'] == 'manifest.json', '录制清单引用必须位于录制根目录')
+        receipt.register(reference)
+        root = receipt.json('manifest.json')
+        require(root.get('format') == 'synaexo_recording' and root.get('schema_version') == 1
+                and root['recording_id'] == receipt.document['recording_id']
+                and root['source_recording_id'] == receipt.document['source_recording_id'],
+                '录制清单与所选结果身份不一致')
+    else:
+        root, field = receipt.document, 'recording_name'
+    name = root.get(field)
+    require(name is None or isinstance(name, str), '录制名称必须是文本，请核对来源清单')
+    return (name or '').strip()
+
+
+@contextmanager
+def index_lock(output_dir):
+    # Lock a separate inode so atomic index replacement cannot lose concurrent exports.
+    with (output_dir / '.synaexo-index.lock').open('a+b') as stream:
+        if os.name == 'nt':
+            import msvcrt
+            if stream.tell() == 0:
+                stream.write(b'\0')
+                stream.flush()
+            stream.seek(0)
+            msvcrt.locking(stream.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(stream, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if os.name == 'nt':
+                stream.seek(0)
+                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(stream, fcntl.LOCK_UN)
+
+
+def update_index(output_dir, report):
+    output_dir = Path(output_dir)
+    target = output_dir / 'synaexo-index.csv'
+    fields = ['录制名称', '录制ID', 'run ID', 'ZIP文件名']
+    archive = Path(report['archive']).resolve().relative_to(output_dir.resolve()).as_posix()
+    row = dict(zip(fields, [report['recording_name'], report['recording_id'], report['result_id'], archive]))
+    with index_lock(output_dir):
+        rows = []
+        if target.exists():
+            with target.open(encoding='utf-8-sig', newline='') as stream:
+                reader = csv.DictReader(stream, strict=True)
+                require(reader.fieldnames == fields, f'索引列名不匹配，请移走旧索引后重试：{target}')
+                rows = list(reader)
+                require(all(set(r) == set(fields) and all(v is not None for v in r.values()) for r in rows),
+                        f'索引行不完整，请修复后重试：{target}')
+        rows = [r for r in rows if r['ZIP文件名'] != archive] + [row]
+        fd, temporary = tempfile.mkstemp(dir=output_dir, prefix='.synaexo-index-', suffix='.part')
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8-sig', newline='') as stream:
+                writer = csv.DictWriter(stream, fields)
+                writer.writeheader()
+                writer.writerows(rows)
+            os.replace(temporary, target)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+    return target.resolve()
 
 
 def storage_client(args):
@@ -479,8 +555,9 @@ def main(with_delivery=False):
     group.add_argument('--csv', type=Path, help='结果索引 CSV；配合 --recording-id 使用')
     parser.add_argument('--result-manifest', help='旧回执联合导出时，补充同一 run 的标准 synaexo_result 清单')
     parser.add_argument('--recording-id', help='CSV 中完整、唯一的录制 ID')
+    parser.add_argument('--recording-name', help='索引中的录制名称；优先于 CSV 的「录制」列和标准录制清单名称')
     parser.add_argument('--model', type=Path, required=True, help='对应完整模型 NPZ：校验后将本次回放所需数组装入 models/smplx.npz')
-    parser.add_argument('--output-dir', type=Path, required=True, help='导出目录；联合模式生成含 delivery/ 和可视化 ZIP 的独立子目录')
+    parser.add_argument('--output-dir', type=Path, required=True, help='导出目录；自动更新 synaexo-index.csv，联合模式另生成独立交付子目录')
     parser.add_argument('--with-delivery', action='store_true', default=with_delivery,
                         help='同时生成该 run 的数据交付包，与可视化 ZIP 放在同一个独立目录')
     cache = Path(tempfile.gettempdir()) / 'synaexo-package-cache'
@@ -491,9 +568,10 @@ def main(with_delivery=False):
     parser.add_argument('--force', action='store_true', help='覆盖单独导出的同名 ZIP；不覆盖联合交付目录')
     args = parser.parse_args()
     try:
+        csv_name = None
         if args.csv:
             require(args.recording_id, '--csv 需要 --recording-id 指定完整录制 ID')
-            args.manifest, _ = select_source(args.csv, args.recording_id)
+            args.manifest, csv_name = select_source(args.csv, args.recording_id)
         args.output_dir.mkdir(parents=True, exist_ok=True)
         client = storage_client(args)
         receipt = Receipt(client, args.manifest, args.cache_dir,
@@ -509,6 +587,8 @@ def main(with_delivery=False):
                     '补充结果清单与可视化回执不是同一录制/run')
         elif args.result_manifest:
             require(False, '--result-manifest 仅用于联合导出')
+        args.recording_name = recording_name(receipt, args.recording_name, csv_name,
+                                             getattr(args, 'delivery_plan', None))
         with tempfile.TemporaryDirectory(prefix='.synaexo-package-', dir=args.output_dir) as directory:
             temporary = Path(directory)
             scratch, stage = temporary / 'scratch', temporary / 'publish'
@@ -516,6 +596,7 @@ def main(with_delivery=False):
             stage.mkdir()
             args.output = stage / 'preview.zip'
             report = build(args, receipt, scratch)
+            report['recording_name'] = args.recording_name
             if args.with_delivery:
                 report = publish_delivery(args, receipt, report, stage)
             else:
@@ -525,6 +606,12 @@ def main(with_delivery=False):
                 else:
                     os.replace(args.output, target)
                 report['archive'] = str(target.resolve())
+        try:
+            report['index'] = str(update_index(args.output_dir, report))
+        except (ValueError, OSError, csv.Error) as error:
+            raise ValueError(f'ZIP 已生成：{report["archive"]}；索引更新失败：{error}') from error
+        if not args.recording_name:
+            print('package_recording: 来源未提供录制名称，索引该列留空；可通过 --recording-name 指定。', file=sys.stderr)
         print(json.dumps(report, ensure_ascii=False, indent=2))
     except (ValueError, KeyError, TypeError, OSError, csv.Error, zipfile.BadZipFile, BotoCoreError, ClientError) as error:
         parser.exit(1, f'package_recording: 打包失败：{error}\n请核对来源回执、模型、S3 配置和输出路径。\n')

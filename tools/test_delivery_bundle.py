@@ -1,4 +1,5 @@
 import csv
+from contextlib import redirect_stderr, redirect_stdout
 import hashlib
 import io
 import json
@@ -6,11 +7,12 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
 from delivery_bundle import DeliveryPlan
-from package_recording import Receipt, digest, publish_delivery
+from package_recording import Receipt, digest, main, publish_delivery
 from test_package_recording import MemoryS3
 
 
@@ -92,7 +94,7 @@ class DeliveryTests(unittest.TestCase):
             originals = [v for v in originals if v['path'] != missing]
         def entry(path, payload):
             return dict(path=path, size_bytes=len(payload), sha256=hashlib.sha256(payload).hexdigest())
-        root = dict(format='synaexo_recording', schema_version=1, recording_id='recording', source_recording_id='source',
+        root = dict(format='synaexo_recording', schema_version=1, recording_id='recording', source_recording_id='source', name='联合导出录制',
                     files=[{**entry(v['path'], raw[v['path']]), **v} for v in originals]
                     + [entry(p, b) for p, b in calibrations.items()] + [entry('raw/tracker/capture/poses.jsonl', b'not-exported')])
         root_bytes = encoded(root)
@@ -154,6 +156,43 @@ class DeliveryTests(unittest.TestCase):
         (delivery / 'README.md').write_text('user changes')
         with self.assertRaisesRegex(ValueError, '未覆盖'):
             self.publish(receipt, report, 'modified')
+
+    def test_joint_cli_indexes_the_published_relative_zip_and_not_failed_delivery(self):
+        _, report, client, *_ = self.fixture()
+        output = self.root / 'exports'
+        def build_zip(args, *_):
+            args.output.write_bytes(b'visualization-validated-separately')
+            return {**report, 'sha256': digest(args.output)}
+        argv = ['export_delivery.py', '--manifest', 's3://bucket/r/results/run/manifest.json',
+                '--model', str(self.root / 'model.npz'), '--output-dir', str(output),
+                '--cache-dir', str(self.root / 'cache')]
+        for fail in [False, True]:
+            if fail:
+                client.objects['r/raw/gopro/cam/a/first.MP4'] = b'corrupted'
+                for cached in (self.root / 'cache').iterdir():
+                    cached.unlink()
+            stdout = io.StringIO()
+            with patch('sys.argv', argv), patch('package_recording.storage_client', return_value=client), \
+                    patch('package_recording.build', side_effect=build_zip), \
+                    redirect_stdout(stdout), redirect_stderr(io.StringIO()):
+                if fail:
+                    with self.assertRaises(SystemExit):
+                        main(with_delivery=True)
+                else:
+                    main(with_delivery=True)
+            if not fail:
+                result = json.loads(stdout.getvalue())
+                before = Path(result['index']).read_bytes()
+                with Path(result['index']).open(encoding='utf-8-sig', newline='') as stream:
+                    row, = csv.DictReader(stream)
+                self.assertEqual(row['录制名称'], '联合导出录制')
+                self.assertEqual(row['录制ID'], 'source')
+                self.assertEqual(row['run ID'], 'run')
+                self.assertEqual((output / row['ZIP文件名']).resolve(), Path(result['archive']))
+                self.assertTrue((output / row['ZIP文件名']).is_file())
+            else:
+                self.assertEqual(Path(result['index']).read_bytes(), before)
+                self.assertEqual(len(list(output.glob('synaexo-delivery-*'))), 1)
 
     def test_missing_intrinsics_world_extrinsics_or_stereo_cannot_pass_as_complete(self):
         for missing in ['calibration/frozen/gopro/cam/intrinsics.json',
