@@ -1,5 +1,6 @@
 import type { NdArray, NumericArray } from "../smplx/npy";
 import { loadMotion, type MotionContract } from "./motion";
+import { parseDisplayUp } from "./orbitBasis";
 
 const hash = (s: unknown): s is string => typeof s === "string" && /^[a-f0-9]{64}$/.test(s);
 const integer = (n: unknown): n is number => typeof n === "number" && Number.isSafeInteger(n);
@@ -67,6 +68,7 @@ export function readPreview(arrays: Record<string, NdArray>) {
       image_size: v.image_size as [number, number], video_pts_ns: videoTimes, source_observed: Array.from(valid, Boolean),
       path: `videos/${v.view_id.toLowerCase()}.mp4`, bytes: v.bytes as number, sha256: v.sha256 as string };
   });
-  return { contract, cameras, body: Array.from(body, Boolean), modelHash: model.sha256 as string,
+  return { contract, cameras, body: Array.from(body, Boolean), displayUp: parseDisplayUp(metadata.display_up),
+    modelHash: model.sha256 as string,
     modelBytes: model.bytes as number };
 }
