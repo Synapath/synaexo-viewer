@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import type { Recording } from "./package";
+import { explicitOrbitDirection } from "./orbitBasis";
 
 export function createScene(
   host: HTMLElement,
@@ -59,7 +60,9 @@ export function createScene(
       : (initialView.T_world_from_camera as number[][][])[initialFrame]
     : null;
   // OrbitControls caches its up basis at construction. Freeze the viewing basis first.
-  if (initialRows)
+  if (descriptor.display_up)
+    orbitCamera.up.set(...descriptor.display_up);
+  else if (initialRows)
     orbitCamera.up.set(
       -initialRows[0][1],
       -initialRows[1][1],
@@ -220,8 +223,10 @@ export function createScene(
       current = index;
       if (!fitted && descriptor.body_observed[index]) {
         const sphere = geometry.boundingSphere!;
-        const direction = new THREE.Vector3(2, orbitCamera.up.y, 3);
-        if (initialRows) {
+        const direction = descriptor.display_up
+          ? explicitOrbitDirection(orbitCamera.up)
+          : new THREE.Vector3(2, orbitCamera.up.y, 3);
+        if (initialRows && !descriptor.display_up) {
           direction.set(
             ...(initialRows
               .map((row) => 2 * row[0] - row[1] - 3 * row[2])

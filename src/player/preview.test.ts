@@ -27,18 +27,34 @@ function preview() {
     model: { sha256: "a".repeat(64), source_sha256: "c".repeat(64), bytes: 1234, num_betas: 1, num_expression: 1 },
     videos: ["gopro", "ego"].map((kind, i) => ({ camera_id: `cam${i}`, kind,
       view_id: kind === "gopro" ? "EXO01" : "EGO01", bytes: 42, sha256: "b".repeat(64), image_size: [64, 64] })) };
-  const update = () => { arrays.preview_metadata = array([], [JSON.stringify(metadata)]); };
+  const update = (extra = {}) => { arrays.preview_metadata = array([], [JSON.stringify({ ...metadata, ...extra })]); };
   update();
   return { arrays, metadata, update };
 }
 test("bundled preview preserves EXO/EGO identities, exact times and missing-frame masks without a quality status", () => {
   const { arrays } = preview(), p = readPreview(arrays);
+  expect(p.displayUp).toBeUndefined();
   expect(p.contract.times).toEqual([0, 33_333_333]);
   expect(p.body).toEqual([true, false]);
   expect(p.cameras.map(v => [v.path, v.source_observed])).toEqual([
     ["videos/exo01.mp4", [false, true]], ["videos/ego01.mp4", [true, false]],
   ]);
 });
+test.each([
+  { supplied: [-2, 0, 0], normalized: [-1, 0, 0] },
+  { supplied: [0, 1, 0], normalized: [0, 1, 0] },
+])("reads $supplied without changing motion or camera timing", ({ supplied, normalized }) => {
+  const { arrays, update } = preview(), before = readPreview(arrays);
+  update({ display_up: supplied });
+  expect(readPreview(arrays)).toEqual({ ...before, displayUp: normalized });
+});
+test.each([null, [0, 0, 0], [0, 1], [0, "-1", 0]].map(display_up => ({ display_up })))(
+  "rejects invalid display up: $display_up", ({ display_up }) => {
+    const { arrays, update } = preview();
+    update({ display_up });
+    expect(() => readPreview(arrays)).toThrow("三维显示向上轴");
+  },
+);
 test("visualization package binds its included model and uses the videos directory", () => {
   const { arrays } = preview();
   const result = readPreview(arrays);

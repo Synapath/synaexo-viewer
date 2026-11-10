@@ -4,6 +4,7 @@ import { ForwardEngine } from "./engine";
 import { parseNpz } from "../smplx/npy";
 import { readPreview } from "./preview";
 import { loadPlaybackModel, sha256Hex } from "./modelAssets";
+import type { DisplayUp } from "./orbitBasis";
 
 export type Camera = {
   camera_id: string;
@@ -22,6 +23,7 @@ export type Recording = {
   frames: number;
   relative_timestamps_ns: number[];
   world_frame: string;
+  display_up?: DisplayUp;
   body_observed: boolean[];
   faces: Uint32Array;
   cameras: Camera[];
@@ -381,7 +383,8 @@ export async function prepareRecording(
     signal.throwIfAborted();
     signal.removeEventListener("abort", abort);
     return { frames: parsed.contract.frames, relative_timestamps_ns: parsed.contract.times,
-      world_frame: parsed.contract.worldFrame, body_observed: parsed.body, faces: initialized.faces,
+      world_frame: parsed.contract.worldFrame, display_up: parsed.displayUp,
+      body_observed: parsed.body, faces: initialized.faces,
       cameras, engine,
       dispose() { engine.dispose(); urls.forEach(URL.revokeObjectURL); archive.close(); } };
   } catch (error) {
