@@ -7,7 +7,7 @@
 ```text
 syanexo-<ZIP 的完整 SHA-256>.zip
 ├── README.md
-├── models/
+├── models/                         # 可选；当前打包脚本仍会附带
 │   └── smplx.npz
 ├── motions/
 │   └── subject_01/
@@ -18,7 +18,7 @@ syanexo-<ZIP 的完整 SHA-256>.zip
     └── ego01.mp4
 ```
 
-一个 ZIP 对应一条录制的一个 run，包含 README、一个回放模型、一个人体动作 NPZ 和 1–16 路视频。EXO／EGO 按实际输入生成，文件名为小写两位序号。ZIP 根目录附带 README，说明录制与 run 身份、文件用途、使用步骤、模型摘要和源质检状态。ZIP 自带 `models/smplx.npz`，不携带独立相机标定、时间轴、来源记录或验证目录，也没有根 manifest。
+一个 ZIP 对应一条录制的一个 run，包含 README、一个人体动作 NPZ 和 1–16 路视频，可以附带 `models/smplx.npz`。EXO／EGO 按实际输入生成，文件名为小写两位序号。README 说明录制与 run 身份、文件用途、使用步骤、模型摘要和源质检状态。可视化 ZIP 不携带独立相机标定、时间轴、来源记录或验证目录，也没有根 manifest。ZIP 有共同的外层目录时，Viewer 在读取时将其归一到录制根目录，不混合不同录制的文件。
 
 ## 打包脚本
 
@@ -142,11 +142,19 @@ synaexo-delivery-<内容摘要>/                    # 整套文件路径与摘�
 
 ## 包内模型
 
-Viewer 自动读取 `models/smplx.npz`，无需再选择模型。打包器保留本次动作使用的体型和表情基底，以及完整的姿态修正、关节回归、蒙皮和所需手部均值；表情基底仍从索引 300 开始。源模型摘要与实际包内模型摘要分别保存，并在读取时核对包内模型的大小和 SHA-256。
+Viewer 优先读取 `models/smplx.npz`，无需再选择模型。打包器保留本次动作使用的体型和表情基底，以及完整的姿态修正、关节回归、蒙皮和所需手部均值；表情基底仍从索引 300 开始。源模型摘要与实际包内模型摘要分别保存，并在读取时核对包内模型的大小和 SHA-256。包内模型损坏时直接报错，不切换模型掩盖损坏。
 
-该模型仅用于本包声明的参数维数，不作为通用完整模型。模型和录制按适用许可在获授权的范围内分发；真实 ZIP 和模型权重不提交到公开仓库或 GitHub Pages，参见 [SMPL-X 模型许可](https://smpl-x.is.tue.mpg.de/modellicense.html)。
+包内模型仅用于本包声明的参数维数，不作为通用完整模型。模型和录制按适用许可在获授权的范围内分发；真实录制不提交到公开仓库或 GitHub Pages。内置模型随站点提供下载，发布范围须符合 [SMPL-X 模型许可](https://smpl-x.is.tue.mpg.de/modellicense.html)及本次发布授权。
 
-每个可视化包必须附带回放模型。缺少模型的旧包需用新版打包脚本重新导出；Viewer 直接读取包内模型，不提供单独导入或浏览器模型缓存。
+ZIP 缺少模型时，Viewer 读取与页面同目录发布的 `models/default.json` 和其中声明的静态模型。清单记录模型文件名、大小、摘要、源模型摘要及参数维数；缺省模型必须与动作声明的源模型一致，且覆盖所需参数维数。旧 `synaexo-preview` 包使用其原模型摘要匹配，保留 `previews/` 视频路径。模型不匹配时明确报错，不将其他性别或维数的模型代入。页面不提供单独导入模型，不将录制包上传到服务器。
+
+静态模型由已获授权的完整源模型生成。在仓库根目录执行：
+
+```sh
+/tmp/synaexo-package-venv/bin/python tools/prepare_viewer_model.py --model /path/to/SMPLX_NEUTRAL.npz --output-dir public/models
+```
+
+该命令使用打包端的 Python 依赖，默认保留 300 维体型、100 维表情和手部均值，并校验源模型及输出。`npm run build` 将 `public/models/` 复制到站点的 `models/`；清单和对应 NPZ 须一起发布，实际分发范围按模型许可及发布授权确定。
 
 ## 校验与分发
 

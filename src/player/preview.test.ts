@@ -47,10 +47,15 @@ test("visualization package binds its included model and uses the videos directo
   arrays.source_model_sha256.data[0] = "d".repeat(64);
   expect(() => readPreview(arrays)).toThrow("来源摘要");
 });
-test("model-free preview packages require repackaging", () => {
+test("model-free legacy previews retain their model identity and original video paths", () => {
   const { arrays, metadata, update } = preview();
   metadata.format = "synaexo-preview"; update();
-  expect(() => readPreview(arrays)).toThrow("需自带 SMPL-X 模型");
+  delete arrays.source_model_sha256;
+  const parsed = readPreview(arrays);
+  expect(parsed.modelHash).toBe("a".repeat(64));
+  expect(parsed.sourceModelHash).toBeUndefined();
+  expect(parsed.modelBytes).toBeUndefined();
+  expect(parsed.cameras.map(v => v.path)).toEqual(["previews/exo01.mp4", "previews/ego01.mp4"]);
 });
 test("rejects mismatched model, invalid identities and unsupported metadata", () => {
   const { arrays, metadata, update } = preview();

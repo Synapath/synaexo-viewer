@@ -1,0 +1,10 @@
+{
+  "format": "synaexo-default-model",
+  "schema_version": 1,
+  "file": "smplx-b176485b85af490264a6089fdac20f19b4a5cdc6d28ea8f78371ebdf6ff0bdb1.npz",
+  "sha256": "b176485b85af490264a6089fdac20f19b4a5cdc6d28ea8f78371ebdf6ff0bdb1",
+  "source_sha256": "376021446ddc86e99acacd795182bbef903e61d33b76b9d8b359c2b0865bd992",
+  "bytes": 65382434,
+  "num_betas": 300,
+  "num_expression": 100
+}

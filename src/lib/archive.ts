@@ -46,10 +46,22 @@ export class RecordingArchive {
   readonly name: string;
   constructor(name: string, entries: FileEntry[]) {
     this.name = name;
-    this.entries = new Map(entries.map((entry) => [entry.filename, entry]));
+    const common = entries[0]?.filename.split("/").slice(0, -1) ?? [];
+    while (common.length && !entries.every(e => e.filename.startsWith(common.join("/") + "/"))) common.pop();
+    let prefix = "";
+    while (common.length) {
+      const candidate = common.join("/") + "/";
+      if (entries.some(e => {
+        const path = e.filename.slice(candidate.length);
+        return path === "manifest.json" || /^motions\/[^/]+\/smplx_parameters\.npz$/.test(path);
+      })) { prefix = candidate; break; }
+      common.pop();
+    }
+    // Keep the original ZIP entries for reads; expose paths relative to the recording root.
+    this.entries = new Map(entries.map(entry => [entry.filename.slice(prefix.length), entry]));
     this.assets = entries
       .map((entry) => ({
-        path: entry.filename,
+        path: entry.filename.slice(prefix.length),
         bytes: entry.uncompressedSize,
         kind: assetKind(entry.filename),
       }))
@@ -107,8 +119,8 @@ export async function openArchive(
       signal.throwIfAborted();
       if (
         entry.directory ||
-        entry.filename.startsWith("__MACOSX/") ||
-        entry.filename.endsWith("/.DS_Store")
+        /(^|\/)__MACOSX\//.test(entry.filename) ||
+        entry.filename.split("/").at(-1) === ".DS_Store"
       )
         continue;
       const path = safeEntryPath(entry.filename);

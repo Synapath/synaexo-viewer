@@ -9,8 +9,9 @@ export function readPreview(arrays: Record<string, NdArray>) {
     || typeof text.data[0] !== "string" || text.data[0].length > 65536)
     throw new Error("动作 NPZ 缺少预览信息，请使用新版打包脚本");
   const metadata = JSON.parse(text.data[0]);
-  if (metadata?.format !== "synaexo-visualization")
-    throw new Error("可视化包需自带 SMPL-X 模型，请使用新版打包脚本重新打包");
+  if (!["synaexo-visualization", "synaexo-preview"].includes(metadata?.format))
+    throw new Error("不支持的可视化包格式，请使用新版打包脚本");
+  const legacy = metadata.format === "synaexo-preview";
   if (metadata.schema_version !== 1
     || typeof metadata.recording_id !== "string" || !metadata.recording_id
     || typeof metadata.result_id !== "string" || !metadata.result_id)
@@ -20,8 +21,8 @@ export function readPreview(arrays: Record<string, NdArray>) {
     || !integer(model.num_betas) || model.num_betas < 1 || model.num_betas > 300
     || !integer(model.num_expression) || model.num_expression < 1 || model.num_expression > 100)
     throw new Error("可视化包模型身份或维数无效");
-  if (!hash(model.source_sha256) || arrays.source_model_sha256?.data[0] !== model.source_sha256
-    || !integer(model.bytes) || model.bytes < 1 || model.bytes > 256 * 1024 ** 2)
+  if (!legacy && (!hash(model.source_sha256) || arrays.source_model_sha256?.data[0] !== model.source_sha256
+    || !integer(model.bytes) || model.bytes < 1 || model.bytes > 256 * 1024 ** 2))
     throw new Error("包内模型大小或来源摘要无效");
   const numeric = (key: string, shape: number[]): NumericArray => {
     const a = arrays[key];
@@ -65,8 +66,9 @@ export function readPreview(arrays: Record<string, NdArray>) {
       || !valid.every(n => n === 0 || n === 1)) throw new Error("视频时间轴或逐帧有效性与动作不一致");
     return { camera_id: v.camera_id as string, view_id: v.view_id as string, kind: v.kind as "gopro" | "ego",
       image_size: v.image_size as [number, number], video_pts_ns: videoTimes, source_observed: Array.from(valid, Boolean),
-      path: `videos/${v.view_id.toLowerCase()}.mp4`, bytes: v.bytes as number, sha256: v.sha256 as string };
+      path: `${legacy ? "previews" : "videos"}/${v.view_id.toLowerCase()}.mp4`, bytes: v.bytes as number, sha256: v.sha256 as string };
   });
   return { contract, cameras, body: Array.from(body, Boolean), modelHash: model.sha256 as string,
-    modelBytes: model.bytes as number };
+    sourceModelHash: legacy ? undefined : model.source_sha256 as string,
+    modelBytes: legacy ? undefined : model.bytes as number };
 }
