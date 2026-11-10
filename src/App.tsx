@@ -15,7 +15,8 @@ import {
 } from "lucide-react";
 import { openArchive, type RecordingArchive } from "./lib/archive";
 import { prepareRecording, type Recording } from "./player/package";
-const Player = lazy(() => import("./player/Player"));
+const loadPlayer = () => import("./player/Player");
+const Player = lazy(loadPlayer);
 import "./App.css";
 
 export default function App() {
@@ -55,6 +56,12 @@ export default function App() {
     let archive: RecordingArchive | undefined;
     try {
       archive = await openArchive(file, controller.signal, () => {});
+      try {
+        await loadPlayer();
+      } catch (cause) {
+        throw new Error("播放器资源加载失败，请刷新页面后重新打开 ZIP", { cause });
+      }
+      controller.signal.throwIfAborted();
       const next = await prepareRecording(
         archive,
         controller.signal,
