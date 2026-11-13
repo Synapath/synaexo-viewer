@@ -1,6 +1,6 @@
 # 可视化包
 
-可视化 ZIP 是单次 run 交付结果旁的可选测试附件。交付结果只导出所选 run 的结果数据，不包含可视化；原始素材、多次结果及处理证据属于平台存储。Viewer 读取可视化包，在浏览器内执行 SMPL-X 前向并同步播放已有叠加的视频。
+可视化 ZIP 是单次 run 交付结果旁的可选测试附件。交付结果只导出所选 run 的结果数据，不包含可视化；原始素材、多次结果及处理证据属于平台存储。Viewer 在浏览器内计算 SMPL-X，并同步播放各路视频。
 
 ## 包内结构
 
@@ -123,7 +123,10 @@ synaexo-delivery-<内容摘要>/                    # 整套文件路径与摘�
 
 ## 动作 NPZ 与播放信息
 
-原有轴角动作数组保留，包括人体、双手、面部、平移、形状和表情参数，以及 `reference_timestamps_ns`、`coordinate_frame`、`units`、`flat_hand_mean`、`use_pca`。要求米制坐标、完整轴角和 `use_pca: false`，不以默认 FPS、坐标轴或手部均值补齐证据。
+两种动作表示均使用 `schema_version: 1`，由 `preview_metadata.representation` 选择播放路径。两种表示都使用米制坐标和 `use_pca: false`，并携带 `transl`、`betas`、`reference_timestamps_ns`、`coordinate_frame`、`units` 和 `flat_hand_mean`。
+
+- `smplx_axis_angle` 读取人体、双手、面部的轴角和表情参数。历史包省略 `representation` 时使用此路径。
+- `smplx_local_rotations` 读取 `joint_rotations[N,55,3,3]`、10 维形状系数和逐帧手部观测。此表示的表情维数为 0，旋转矩阵已包含最终手势。
 
 打包器在同一个 NPZ 内补充以下数组；解析及维度检查以 [`readPreview`](src/player/preview.ts) 为准：
 
@@ -140,7 +143,7 @@ synaexo-delivery-<内容摘要>/                    # 整套文件路径与摘�
 
 主时间轴和视频 PTS 必须精确、严格递增，并在解析器允许的容器时间基误差内一致。人体部分缺失时需要逐帧 mask；仅在来源明确声明全帧有效时才能由总数生成全有效 mask。缺失观测不会当作有效数据，源 `physical_accuracy_passed` 状态保持不变。
 
-包内视频均已烘焙人体，直接显示原画面，不重复投影。三维人体在 Worker 中由动作参数生成，不需要相机标定。
+Worker 由动作参数生成三维人体。`baked_projection` 直接显示视频，历史轴角包省略视频类型时沿用这一行为。矩阵包的各路 `clean_proxy` 使用 NPZ 内的 `preview_camera_<i>_K[3,3]`（代理视频像素内参）、`preview_camera_<i>_poses[N,4,4]`（相机到世界坐标的逐帧变换）和 `preview_camera_<i>_pose_valid[N]` 投影人体。人体、视频来源和相机位姿都有效的帧才显示叠加。
 
 ## 包内模型
 

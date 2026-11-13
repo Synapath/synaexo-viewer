@@ -1,6 +1,6 @@
 import { parseNpz } from "../smplx/npy";
 import { SmplxModel } from "../smplx/smplxModel";
-import { loadMotion, type MotionContract } from "./motion";
+import { loadMotion, mask, readTimeline, type MotionContract } from "./motion";
 
 let model: SmplxModel | null = null,
   motion: ReturnType<typeof loadMotion> | null = null;
@@ -46,7 +46,7 @@ self.onmessage = async (event: MessageEvent) => {
         shape.shape.length !== 3 ||
         shape.shape[0] !== 10475 ||
         shape.shape[1] !== 3 ||
-        shape.shape[2] < 300 + c.numExpression ||
+        shape.shape[2] < (c.numExpression ? 300 + c.numExpression : c.numBetas) ||
         Array.isArray(shape.data) ||
         !shape.data.every(Number.isFinite)
       )
@@ -79,30 +79,19 @@ self.onmessage = async (event: MessageEvent) => {
         model.parents.some((p, i) => i > 0 && (p < 0 || p >= i))
       )
         throw new Error("模型关节层级无效");
-      motion = loadMotion(await parseNpz(new Uint8Array(r.motion)), c);
+      const loadedMotion = loadMotion(await parseNpz(new Uint8Array(r.motion)), c);
       const observed: boolean[][] = [];
       for (const buffer of r.maps as ArrayBuffer[]) {
-        const map = await parseNpz(new Uint8Array(buffer)),
-          a = map.source_observed,
-          t = map.reference_timestamps_ns;
+        const map = await parseNpz(new Uint8Array(buffer), new Set(["reference_timestamps_ns", "source_observed"]));
+        const timeline = readTimeline(map.reference_timestamps_ns, c.frames);
         if (
-          !a ||
-          Array.isArray(a.data) ||
-          a.data.length !== c.frames ||
-          !a.data.every((v) => v === 0 || v === 1) ||
-          !t ||
-          Array.isArray(t.data) ||
-          t.data.length !== c.frames
+          timeline.referenceOrigin !== loadedMotion.referenceOrigin ||
+          timeline.times.some((t, i) => t !== loadedMotion.times[i])
         )
-          throw new Error("相机逐帧观测证据无效");
-        for (let i = 0; i < c.frames; i++)
-          if (
-            BigInt(t.data[i]) - BigInt(c.referenceOrigin) !==
-            BigInt(c.times[i])
-          )
-            throw new Error("相机观测与主时间轴不一致");
-        observed.push(Array.from(a.data, Boolean));
+          throw new Error("相机观测与主时间轴不一致");
+        observed.push(mask(map, "source_observed", [c.frames]));
       }
+      motion = loadedMotion;
       const indices = model.faces.slice();
       self.postMessage(
         { id: r.id, faces: indices, observed },
