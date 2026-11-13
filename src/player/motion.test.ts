@@ -45,33 +45,61 @@ function clip() {
   };
   return { arrays, contract };
 }
-test("full forward preserves shape, pose corrective, root rotation and world translation", () => {
+test.each(["smplx_axis_angle", "smplx_local_rotations"] as const)(
+  "%s forward preserves shape, pose corrective, root rotation and world translation", representation => {
+  const matrix = representation === "smplx_local_rotations";
+  const shapeDims = matrix ? 10 : 301;
   const vertices = 10475,
-    dirs = new Float32Array(vertices * 3 * 301),
+    dirs = new Float32Array(vertices * 3 * shapeDims),
     posedirs = new Float32Array(vertices * 3 * 486),
     template = new Float32Array(vertices * 3),
     weights = new Float32Array(vertices * 55),
     parents = new Int32Array(110);
   template[3] = 1;
-  dirs[4 * 301] = 1;
+  dirs[4 * shapeDims] = 1;
   posedirs[5 * 486] = 3;
   parents[0] = -1;
   for (let v = 0; v < vertices; v++) weights[v * 55] = 1;
   const model = SmplxModel.fromArrays(
     {
       v_template: array([vertices, 3], template),
-      shapedirs: array([vertices, 3, 301], dirs),
+      shapedirs: array([vertices, 3, shapeDims], dirs),
       posedirs: array([vertices, 3, 486], posedirs),
       J_regressor: array([55, vertices], new Float32Array(55 * vertices)),
       weights: array([vertices, 55], weights),
       kintree_table: array([2, 55], parents),
       f: array([1, 3], new Int32Array([0, 1, 2])),
     },
-    { numBetas: 1, numExpr: 1 },
+    { numBetas: matrix ? 10 : 1, numExpr: matrix ? 0 : 1 },
   );
-  const { arrays, contract } = clip(),
-    motion = loadMotion(arrays, contract),
-    point = motion.frame(model, 0).slice(3, 6);
+  const { arrays, contract } = clip();
+  contract.representation = representation;
+  if (matrix) {
+    contract.numBetas = 10;
+    contract.numExpression = 0;
+    contract.referenceOrigin = String(2n ** 60n + 7n);
+    arrays.reference_timestamps_ns.int64 = new BigInt64Array([
+      BigInt(contract.referenceOrigin), BigInt(contract.referenceOrigin) + 41_000_000n,
+    ]);
+    arrays.betas = array([1, 10], new Float32Array([2, 0, 0, 0, 0, 0, 0, 0, 0, 0]));
+    arrays.body_observed = array([2], new Int32Array([1, 1]));
+    arrays.hand_accepted = array([2, 2], new Int32Array(4));
+    arrays.hand_view_count = array([2, 2], new Int32Array(4));
+    const rotations = new Float32Array(2 * 55 * 9);
+    for (let i = 0; i < rotations.length; i += 9)
+      rotations[i] = rotations[i + 4] = rotations[i + 8] = 1;
+    for (const offset of [0, 9])
+      rotations.set([0, -1, 0, 1, 0, 0, 0, 0, 1], offset);
+    arrays.joint_rotations = array([2, 55, 3, 3], rotations);
+    delete arrays.global_orient;
+    delete arrays.body_pose;
+    delete arrays.expression;
+    expect(loadMotion(arrays, contract).times).toEqual([0, 41_000_000]);
+    rotations[18] = -1;
+    expect(() => loadMotion(arrays, contract)).toThrow("方向无效");
+    rotations[18] = 1;
+  }
+  const point = loadMotion(arrays, contract).frame(model, 0).slice(3, 6);
   expect(point[0]).toBeCloseTo(3, 5);
   expect(point[1]).toBeCloseTo(7, 5);
   expect(point[2]).toBeCloseTo(4, 5);

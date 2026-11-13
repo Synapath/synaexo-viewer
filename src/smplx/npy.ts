@@ -10,10 +10,12 @@ export type NdArray = {
   shape: number[];
   fortranOrder: boolean;
   data: NumericArray | string[];
+  /** Exact clock values; consumers must subtract the origin before conversion. */
+  int64?: BigInt64Array | BigUint64Array;
 };
 const LIMIT = 256 * 1024 ** 2;
 
-export function parseNpy(bytes: Uint8Array): NdArray {
+export function parseNpy(bytes: Uint8Array, preserveClock = false): NdArray {
   if (
     bytes.length < 12 ||
     ![147, 78, 85, 77, 80, 89].every((value, index) => bytes[index] === value)
@@ -63,6 +65,7 @@ export function parseNpy(bytes: Uint8Array): NdArray {
   const little = endian !== ">",
     dataView = new DataView(bytes.buffer, bytes.byteOffset + offset, payload);
   let data: NumericArray | string[];
+  let int64: BigInt64Array | BigUint64Array | undefined;
   if (kind === "U" || kind === "S") {
     data = Array.from({ length: count }, (_, i) => {
       let s = "";
@@ -86,12 +89,16 @@ export function parseNpy(bytes: Uint8Array): NdArray {
       throw new Error(`不支持 NPY 数据类型 ${dtype}`);
     data =
       kind === "f"
-        ? new Float32Array(count)
+        ? (width === 8 ? new Float64Array(count) : new Float32Array(count))
         : width === 8
           ? new Float64Array(count)
           : kind === "u"
             ? new Uint32Array(count)
             : new Int32Array(count);
+    if (preserveClock && ["i", "u"].includes(kind) && width === 8) {
+      if (shape.length !== 1) throw new Error("精确时间轴必须是一维数组");
+      int64 = kind === "u" ? new BigUint64Array(count) : new BigInt64Array(count);
+    }
     for (let i = 0; i < count; i++) {
       const at = i * stride;
       let n: number;
@@ -101,12 +108,10 @@ export function parseNpy(bytes: Uint8Array): NdArray {
             ? dataView.getFloat32(at, little)
             : dataView.getFloat64(at, little);
       else if (width === 8) {
-        n = Number(
-          kind === "u"
-            ? dataView.getBigUint64(at, little)
-            : dataView.getBigInt64(at, little),
-        );
-        if (!Number.isSafeInteger(n))
+        const exact = kind === "u" ? dataView.getBigUint64(at, little) : dataView.getBigInt64(at, little);
+        if (int64) int64[i] = exact;
+        n = Number(exact);
+        if (!int64 && !Number.isSafeInteger(n))
           throw new Error("NPY 64 位整数超出精确范围；时间证据不能截断");
       } else
         n =
@@ -144,7 +149,7 @@ export function parseNpy(bytes: Uint8Array): NdArray {
     }
     data = target;
   }
-  return { dtype, shape, fortranOrder: false, data };
+  return { dtype, shape, fortranOrder: false, data, ...(int64 ? { int64 } : {}) };
 }
 
 export async function parseNpz(
@@ -175,6 +180,7 @@ export async function parseNpz(
       try {
         out[key] = parseNpy(
           await entry.getData(new Uint8ArrayWriter(), { checkCrc32: true }),
+          key === "reference_timestamps_ns",
         );
       } catch (error) {
         throw new Error(`${key}: ${(error as Error).message}`);

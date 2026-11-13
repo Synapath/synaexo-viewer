@@ -377,7 +377,7 @@ export async function prepareRecording(
       if (sha256Hex(await blob.arrayBuffer()) !== video.sha256) throw new Error(`视频校验失败：${video.path}`);
       signal.throwIfAborted();
       const url = URL.createObjectURL(blob); urls.push(url);
-      cameras.push({ ...video, url, baked: true });
+      cameras.push({ ...video, url });
     }
     const initialized = await engine.init(model, motionBuffer, [], parsed.contract);
     signal.throwIfAborted();

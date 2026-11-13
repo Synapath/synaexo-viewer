@@ -28,6 +28,16 @@ test("keeps nanosecond int64 evidence beyond the low 32 bits exact and rejects u
   view.setBigInt64(0, 2n ** 53n + 1n, true);
   expect(() => parseNpy(npy("<i8", [2], bytes))).toThrow("超出精确范围");
 });
+
+test("keeps double precision calibration and the absolute int64 reference clock", () => {
+  const calibration = 12345.123456789;
+  const floats = new Uint8Array(new Float64Array([calibration]).buffer);
+  expect(parseNpy(npy("<f8", [1], floats)).data[0]).toBe(calibration);
+  const exact = new BigInt64Array([2n ** 60n + 123n, 2n ** 60n + 33_333_456n]);
+  const clock = npy("<i8", [2], new Uint8Array(exact.buffer));
+  expect(parseNpy(clock, true).int64).toEqual(exact);
+  expect(() => parseNpy(clock)).toThrow("超出精确范围");
+});
 test("restores Fortran column-major shape bases to row-major and rejects truncated payloads", () => {
   const bytes = new Uint8Array(new Float32Array([1, 4, 2, 5, 3, 6]).buffer);
   expect([...parseNpy(npy("<f4", [2, 3], bytes, true)).data]).toEqual([
