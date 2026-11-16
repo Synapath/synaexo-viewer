@@ -55,7 +55,7 @@ export default function Player({
       });
     } catch (error) {
       diagnose("player.initialization_failed");
-      onError(recording, "三维预览初始化失败：" + (error as Error).message);
+      onError(recording, "相机预览初始化失败：" + (error as Error).message);
     }
     return () => {
       playback.current?.dispose();
@@ -77,7 +77,7 @@ export default function Player({
     window.addEventListener("keydown", restore);
     return () => window.removeEventListener("keydown", restore);
   }, [focused]);
-  const names = ["SMPL-X", ...recording.cameras.map((c) => c.view_id)],
+  const names = recording.cameras.map((camera) => camera.view_id),
     columns = focused === null ? viewColumns(names.length) : 1;
   const gridStyle = {
     "--columns": columns,
@@ -101,14 +101,13 @@ export default function Player({
             hidden={focused !== null && focused !== i}
           >
             <div className="tile-heading">
-              <span title={i ? recording.cameras[i - 1].camera_id : undefined}>
+              <span title={recording.cameras[i].camera_id}>
                 {name}
               </span>
               <div className="tile-actions">
-                {i > 0 &&
-                  !recording.cameras[i - 1].source_observed[state.frame] && (
-                    <span>缺帧</span>
-                  )}
+                {!recording.cameras[i].source_observed[state.frame] && (
+                  <span>缺帧</span>
+                )}
                 <button
                   ref={(button) => { focusButtons.current[i] = button; }}
                   className="icon-button"

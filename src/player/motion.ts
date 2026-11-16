@@ -3,7 +3,6 @@ import type { SmplxModel, SmplxPose } from "../smplx/smplxModel";
 import { SMPLX_NUM_JOINTS } from "../smplx/skeleton";
 
 type Field = { data: NumericArray; width: number; rows: number };
-export type BodyFrame = { vertices: Float32Array; joints: Float32Array };
 const axisAngleFields = [
   ["global_orient", 3, false],
   ["body_pose", 63, false],
@@ -127,7 +126,7 @@ export function loadMotion(arrays: Record<string, NdArray>, contract: MotionCont
   };
   return {
     ...timeline,
-    frame(model: SmplxModel, index: number): BodyFrame {
+    frame(model: SmplxModel, index: number): Float32Array {
       if (!Number.isInteger(index) || index < 0 || index >= contract.frames) throw new Error("人体帧号超出范围");
       let poseParams: SmplxPose;
       if (rotations) {
@@ -145,17 +144,15 @@ export function loadMotion(arrays: Record<string, NdArray>, contract: MotionCont
           for (let i = 0; i < 90; i++) pose[75 + i] += model.handsMean[i];
         poseParams = { pose };
       }
-      const vertices = model.forward({
+      const joints = model.forwardJoints({
         ...poseParams,
         betas: Float32Array.from(slice("betas", index)),
         expression: contract.numExpression ? Float32Array.from(slice("expression", index)) : new Float32Array(),
-      }, { poseBlendShapes: true }).slice();
-      const joints = model.posedJoints.slice(), t = slice("transl", index);
-      for (const positions of [vertices, joints]) {
-        for (let i = 0; i < positions.length; i++) positions[i] += t[i % 3];
-        if (!positions.every(Number.isFinite)) throw new Error("人体前向包含无效坐标");
-      }
-      return { vertices, joints };
+      }).slice();
+      const t = slice("transl", index);
+      for (let i = 0; i < joints.length; i++) joints[i] += t[i % 3];
+      if (!joints.every(Number.isFinite)) throw new Error("人体前向包含无效坐标");
+      return joints;
     },
   };
 }

@@ -276,8 +276,8 @@ export class SmplxModel {
     }
   }
 
-  /** Build per-joint skinning matrices from the kinematic chain. */
-  private updateKinematics() {
+  /** Pose the joint chain, with skinning matrices when a surface is needed. */
+  private updateKinematics(skinning: boolean) {
     const J = this.numJoints;
     const rot = this.rotMats;
     const joints = this.joints;
@@ -372,6 +372,7 @@ export class SmplxModel {
       pj[j * 3] = global[gb + 3];
       pj[j * 3 + 1] = global[gb + 7];
       pj[j * 3 + 2] = global[gb + 11];
+      if (!skinning) continue;
       const jx = joints[j * 3],
         jy = joints[j * 3 + 1],
         jz = joints[j * 3 + 2];
@@ -387,6 +388,29 @@ export class SmplxModel {
     }
   }
 
+  private preparePose(params: SmplxParams) {
+    const shapeKey = params.betas.join(",") + "|" + params.expression.join(",");
+    if (this.shapeDirty || shapeKey !== this.lastShapeKey) {
+      this.updateShape(params);
+      this.lastShapeKey = shapeKey;
+      this.shapeDirty = false;
+    }
+
+    // Published matrix results already include the final hand and body rotations.
+    if (params.rotations) this.rotMats.set(params.rotations);
+    else {
+      for (let j = 0; j < this.numJoints; j++)
+        SmplxModel.rodrigues(params.pose, j * 3, this.rotMats, j * 9);
+    }
+  }
+
+  /** Compute posed joint coordinates into the model's reusable joint buffer. */
+  forwardJoints(params: SmplxParams): Float32Array {
+    this.preparePose(params);
+    this.updateKinematics(false);
+    return this.posedJoints;
+  }
+
   /**
    * Compute final posed + shaped vertex positions for the given parameters.
    * Returns a Float32Array of length V*3 (reused buffer; copy if you need to keep it).
@@ -398,21 +422,7 @@ export class SmplxModel {
     const V = this.numVerts;
     const V3 = V * 3;
     const J = this.numJoints;
-
-    // 1. Shape + rest joints (cached unless shape/expression changed).
-    const shapeKey = params.betas.join(",") + "|" + params.expression.join(",");
-    if (this.shapeDirty || shapeKey !== this.lastShapeKey) {
-      this.updateShape(params);
-      this.lastShapeKey = shapeKey;
-      this.shapeDirty = false;
-    }
-
-    // Published matrix results already include the final hand and body rotations.
-    if (params.rotations) this.rotMats.set(params.rotations);
-    else {
-      for (let j = 0; j < J; j++)
-        SmplxModel.rodrigues(params.pose, j * 3, this.rotMats, j * 9);
-    }
+    this.preparePose(params);
 
     // 3. Pose-corrective blend shapes: v_posed = v_shaped + posedirs @ (R_j - I).
     const vPosed = this.vPosed;
@@ -440,7 +450,7 @@ export class SmplxModel {
     }
 
     // 4. Kinematic chain -> skinning matrices.
-    this.updateKinematics();
+    this.updateKinematics(true);
 
     // 5. Linear blend skinning: blend per-joint transforms by skin weights, apply.
     const w = this.weights;

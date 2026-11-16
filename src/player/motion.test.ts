@@ -46,7 +46,7 @@ function clip() {
   return { arrays, contract };
 }
 test.each(["smplx_axis_angle", "smplx_local_rotations"] as const)(
-  "%s forward preserves vertices and articulated joints in the result world frame", representation => {
+  "%s projects articulated joints in the result world frame without changing mesh forward", representation => {
   const matrix = representation === "smplx_local_rotations";
   const shapeDims = matrix ? 10 : 301;
   const vertices = 10475,
@@ -106,13 +106,21 @@ test.each(["smplx_axis_angle", "smplx_local_rotations"] as const)(
   const motion = loadMotion(arrays, contract);
   const first = motion.frame(model, 0);
   const second = motion.frame(model, 1);
-  const point = first.vertices.slice(3, 6);
-  expect(point[0]).toBeCloseTo(3, 5);
-  expect(point[1]).toBeCloseTo(7, 5);
-  expect(point[2]).toBeCloseTo(4, 5);
-  expect(first.joints).toHaveLength(55 * 3);
-  [5, 6, 7, 3, 7, 7, 2, 7, 7].forEach((value, i) => expect(first.joints[i]).toBeCloseTo(value, 5));
-  expect(Array.from(second.joints.slice(6, 9))).toEqual([8, 9, 8]);
+  expect(first).toHaveLength(55 * 3);
+  [5, 6, 7, 3, 7, 7, 2, 7, 7].forEach((value, i) => expect(first[i]).toBeCloseTo(value, 5));
+  expect(Array.from(second.slice(6, 9))).toEqual([8, 9, 8]);
+
+  const pose = new Float32Array(55 * 3), betas = new Float32Array(contract.numBetas);
+  pose[2] = pose[5] = Math.PI / 2;
+  betas[0] = 2;
+  const mesh = model.forward({
+    ...(matrix ? { rotations: (arrays.joint_rotations.data as Float32Array).subarray(0, 55 * 9) } : { pose }),
+    betas,
+    expression: new Float32Array(contract.numExpression),
+  });
+  [-2, 1, -3].forEach((value, i) => expect(mesh[3 + i]).toBeCloseTo(value, 5));
+  const translation = [5, 6, 7];
+  expect(first).toEqual(Float32Array.from(model.posedJoints, (value, i) => value + translation[i % 3]));
 });
 test("rejects time or coordinate evidence mismatches instead of assuming an FPS or a frame", () => {
   const { arrays, contract } = clip();

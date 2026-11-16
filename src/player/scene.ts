@@ -1,10 +1,10 @@
 import * as THREE from "three";
-import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { LineMaterial } from "three/addons/lines/LineMaterial.js";
+import { LineSegments2 } from "three/addons/lines/LineSegments2.js";
+import { LineSegmentsGeometry } from "three/addons/lines/LineSegmentsGeometry.js";
 import type { Camera, Recording } from "./package";
 import type { RecordDiagnostic } from "../lib/diagnostics";
-import { SMPLX_NUM_JOINTS, SMPLX_NUM_VERTS } from "../smplx/skeleton";
-import type { BodyFrame } from "./motion";
-import { explicitOrbitDirection } from "./orbitBasis";
+import { SMPLX_NUM_JOINTS } from "../smplx/skeleton";
 
 function cameraPose(camera: Camera | undefined, frame: number) {
   const poses = camera?.T_world_from_camera;
@@ -59,52 +59,6 @@ export function createScene(
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   renderer.setClearColor(0x101010);
   host.prepend(renderer.domElement);
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute(
-    "position",
-    new THREE.BufferAttribute(new Float32Array(SMPLX_NUM_VERTS * 3), 3),
-  );
-  geometry.setIndex(new THREE.BufferAttribute(descriptor.faces, 1));
-  const material = new THREE.MeshStandardMaterial({
-    color: 0xffffff,
-    transparent: false,
-    opacity: 1,
-    side: THREE.DoubleSide,
-    depthWrite: true,
-    roughness: 0.8,
-  });
-  const scene = new THREE.Scene(),
-    mesh = new THREE.Mesh(geometry, material);
-  mesh.frustumCulled = false;
-  scene.add(mesh);
-  scene.add(new THREE.HemisphereLight(0xffffff, 0x999999, 2));
-  const light = new THREE.DirectionalLight(0xffffff, 2);
-  light.position.set(2, 4, 3);
-  scene.add(light);
-  const orbitCamera = new THREE.PerspectiveCamera(38, 1, 0.01, 1000);
-  if (descriptor.world_frame.startsWith("pico_")) orbitCamera.up.set(0, -1, 0);
-  const initialFrame = Math.max(
-    0,
-    descriptor.body_observed.findIndex(
-      (body, index) =>
-        body && descriptor.cameras.some((camera) => camera.pose_valid?.[index] ?? camera.source_observed[index]),
-    ),
-  );
-  const initialView = descriptor.cameras.find(
-    (camera) => camera.T_world_from_camera && camera.pose_valid?.[initialFrame],
-  );
-  const initialRows = cameraPose(initialView, initialFrame);
-  // OrbitControls caches its up basis at construction. Freeze the viewing basis first.
-  if (descriptor.display_up)
-    orbitCamera.up.set(...descriptor.display_up);
-  else if (initialRows)
-    orbitCamera.up.set(
-      -initialRows[0][1],
-      -initialRows[1][1],
-      -initialRows[2][1],
-    );
-  const controls = new OrbitControls(orbitCamera, tiles[0]);
-  controls.enableDamping = false;
   const textures = descriptor.cameras.map(() => new THREE.Texture());
   const backgrounds = textures.map((texture) => {
     texture.colorSpace = THREE.SRGBColorSpace;
@@ -135,13 +89,20 @@ export function createScene(
   });
   const points = new THREE.Points(jointGeometry, jointMaterial);
   points.frustumCulled = false;
-  jointScene.add(points);
-  const axes = new THREE.AxesHelper(0.5);
-  scene.add(axes);
-  let current = -1,
-    fitted = false,
-    disposed = false;
-  const lastCenter = new THREE.Vector3();
+
+  const parents = descriptor.jointParents;
+  const bonePositions = new Float32Array((parents.length - 1) * 6);
+  const boneGeometry = new LineSegmentsGeometry().setPositions(bonePositions);
+  const boneBuffer = (boneGeometry.getAttribute("instanceStart") as THREE.InterleavedBufferAttribute).data;
+  boneBuffer.setUsage(THREE.DynamicDrawUsage);
+  const boneMaterial = new LineMaterial({
+    color: getComputedStyle(host).color, linewidth: 1.5, depthTest: false, depthWrite: false,
+  });
+  const bones = new LineSegments2(boneGeometry, boneMaterial);
+  bones.frustumCulled = false;
+  points.renderOrder = 1;
+  jointScene.add(bones, points);
+  let current = -1, disposed = false;
   function draw() {
     if (disposed || current < 0) return;
     const area = host.getBoundingClientRect();
@@ -150,33 +111,19 @@ export function createScene(
     renderer.setScissorTest(true);
     tiles.forEach((tile, index) => {
       const box = tile.getBoundingClientRect();
-      let width = box.width,
-        height = box.height,
-        x = box.left - area.left,
-        y = area.bottom - box.bottom;
-      if (index) {
-        const [w, h] = descriptor.cameras[index - 1].image_size;
-        const scale = Math.min(width / w, height / h);
-        x += (width - w * scale) / 2;
-        y += (height - h * scale) / 2;
-        width = w * scale;
-        height = h * scale;
-      }
+      const config = descriptor.cameras[index];
+      const [w, h] = config.image_size;
+      const scale = Math.min(box.width / w, box.height / h);
+      const width = w * scale, height = h * scale;
+      const x = box.left - area.left + (box.width - width) / 2;
+      const y = area.bottom - box.bottom + (box.height - height) / 2;
       if (width <= 0 || height <= 0) return;
       renderer.setViewport(x, y, width, height);
       renderer.setScissor(x, y, width, height);
       renderer.clear();
-      if (!index) {
-        orbitCamera.aspect = width / height;
-        orbitCamera.updateProjectionMatrix();
-        mesh.visible = descriptor.body_observed[current];
-        renderer.render(scene, orbitCamera);
-        return;
-      }
-      const config = descriptor.cameras[index - 1];
       if (!config.source_observed[current]) return;
-      renderer.render(backgrounds[index - 1], ortho);
-      const projector = projectors[index - 1];
+      renderer.render(backgrounds[index], ortho);
+      const projector = projectors[index];
       if (!projector || !descriptor.body_observed[current] || !config.pose_valid?.[current]) return;
       const rows = cameraPose(config, current);
       if (!rows) return;
@@ -188,6 +135,8 @@ export function createScene(
       ).multiply(cameraAxes);
       projector.matrixWorldNeedsUpdate = true;
       jointMaterial.size = THREE.MathUtils.clamp(width / 120, 4, 8);
+      boneMaterial.resolution.set(width, height);
+      boneMaterial.linewidth = Math.max(1.5, jointMaterial.size / 4);
       renderer.autoClear = false;
       renderer.render(jointScene, projector);
       renderer.autoClear = true;
@@ -201,52 +150,22 @@ export function createScene(
   const observer = new ResizeObserver(resize);
   observer.observe(host);
   tiles.forEach((tile) => observer.observe(tile));
-  controls.addEventListener("change", draw);
   resize();
   return {
     present(
-      { vertices, joints }: BodyFrame,
+      joints: Float32Array,
       index: number,
       images: HTMLCanvasElement[],
     ) {
-      const attr = geometry.getAttribute("position") as THREE.BufferAttribute;
-      (attr.array as Float32Array).set(vertices);
-      attr.needsUpdate = true;
       (jointPositions.array as Float32Array).set(joints);
       jointPositions.needsUpdate = true;
-      geometry.computeVertexNormals();
-      geometry.computeBoundingSphere();
-      current = index;
-      if (!fitted && descriptor.body_observed[index]) {
-        const sphere = geometry.boundingSphere!;
-        const direction = descriptor.display_up
-          ? explicitOrbitDirection(orbitCamera.up)
-          : new THREE.Vector3(2, orbitCamera.up.y, 3);
-        if (initialRows && !descriptor.display_up) {
-          direction.set(
-            ...(initialRows
-              .map((row) => 2 * row[0] - row[1] - 3 * row[2])
-              .slice(0, 3) as [number, number, number]),
-          );
-        }
-        controls.target.copy(sphere.center);
-        orbitCamera.position
-          .copy(sphere.center)
-          .add(
-            direction
-              .normalize()
-              .multiplyScalar(Math.max(1, sphere.radius) * 3),
-          );
-        lastCenter.copy(sphere.center);
-        fitted = true;
-        controls.update();
-      } else if (fitted && descriptor.body_observed[index]) {
-        const center = geometry.boundingSphere!.center,
-          delta = center.clone().sub(lastCenter);
-        controls.target.add(delta);
-        orbitCamera.position.add(delta);
-        lastCenter.copy(center);
+      for (let child = 1; child < parents.length; child++) {
+        const parent = parents[child] * 3, offset = (child - 1) * 6;
+        bonePositions.set(joints.subarray(parent, parent + 3), offset);
+        bonePositions.set(joints.subarray(child * 3, child * 3 + 3), offset + 3);
       }
+      boneBuffer.needsUpdate = true;
+      current = index;
       images.forEach((image, i) => {
         textures[i].image = image;
         textures[i].needsUpdate = true;
@@ -256,7 +175,6 @@ export function createScene(
     dispose() {
       disposed = true;
       observer.disconnect();
-      controls.dispose();
       textures.forEach((t) => { t.dispose(); t.image = null; });
       backgrounds.forEach((s) =>
         s.traverse((o) => {
@@ -266,14 +184,12 @@ export function createScene(
           }
         }),
       );
-      geometry.dispose();
-      material.dispose();
+      boneGeometry.dispose();
+      boneMaterial.dispose();
       jointGeometry.dispose();
       jointMaterial.dispose();
       jointTexture.dispose();
       jointTexture.image.width = jointTexture.image.height = 0;
-      axes.geometry.dispose();
-      (axes.material as THREE.Material).dispose();
       renderer.domElement.removeEventListener("webglcontextlost", contextLost);
       renderer.dispose();
       renderer.forceContextLoss();

@@ -139,11 +139,11 @@ synaexo-delivery-<内容摘要>/                    # 整套文件路径与摘�
 | `preview_video_pts_ns` | `[V,N]` 各路 MP4 的相对纳秒 PTS |
 | `preview_source_observed` | `[V,N]` 各路视频逐帧来源有效性 |
 
-`preview_metadata.display_up` 可选，填写由来源证据换算到动作坐标系的三个有限数字，且不能全为零。Viewer 将其归一化，仅调整独立三维视图的观看方向。缺失时沿用原有视角行为。
+`preview_metadata.display_up` 是可选的三维显示向上轴，由来源证据换算到动作坐标系，以三个有限且不全为零的数字表示。
 
 主时间轴和视频 PTS 必须精确、严格递增，并在解析器允许的容器时间基误差内一致。人体部分缺失时需要逐帧 mask；仅在来源明确声明全帧有效时才能由总数生成全有效 mask。缺失观测不会当作有效数据，源 `physical_accuracy_passed` 状态保持不变。
 
-Worker 由动作参数生成三维人体和 55 个 SMPL-X 关节点。EXO 和 EGO 的 `clean_proxy` 使用 `preview_camera_<i>_K[3,3]`（代理视频像素内参）、`preview_camera_<i>_poses[N,4,4]`（相机到世界变换）和 `preview_camera_<i>_pose_valid[N]` 将关节点投影到视频上。仅在人体、视频来源、相机位姿均有效的帧叠加。缺少投影数组、已烘焙或省略视频类型的视频直接显示包内 MP4。
+Worker 由动作参数解算 55 个 SMPL-X 关节点。EXO 和 EGO 的 `clean_proxy` 使用 `preview_camera_<i>_K[3,3]`（代理视频像素内参）、`preview_camera_<i>_poses[N,4,4]`（相机到世界变换）和 `preview_camera_<i>_pose_valid[N]` 投影关节点，并按模型的关节层级连线。仅在人体、视频来源、相机位姿均有效的帧叠加。缺少投影数组、已烘焙或省略视频类型的视频直接显示包内 MP4。
 
 ## 包内模型
 
@@ -167,4 +167,4 @@ ZIP 缺少模型时，Viewer 读取与页面同目录发布的 `models/default.j
 
 真实 ZIP、模型和凭据保持在仓库之外。报告可用于核对单次打包的来源和摘要，不是可视化 ZIP 的必需文件。
 
-页面继续支持自带模型的 `synaexo-viewer-package` 旧清单包及其 `previews/` 视频；新脚本生成本文的 README、models、motions、videos 结构。旧清单包仅为标定声明已去畸变的 `clean_proxy` 视频叠加关节点。源质检字段保留在交付数据中，Viewer 不展示质检状态。
+页面继续支持自带模型的 `synaexo-viewer-package` 旧清单包及其 `previews/` 视频；新脚本生成本文的 README、models、motions、videos 结构。旧清单包仅为标定声明已去畸变的 `clean_proxy` 视频叠加关节点和骨架连线。源质检字段保留在交付数据中，Viewer 不展示质检状态。

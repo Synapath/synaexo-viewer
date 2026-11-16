@@ -1,6 +1,6 @@
 import { parseNpz } from "../smplx/npy";
 import { SmplxModel } from "../smplx/smplxModel";
-import { SMPLX_NUM_JOINTS, SMPLX_NUM_VERTS } from "../smplx/skeleton";
+import { SMPLX_NUM_JOINTS } from "../smplx/skeleton";
 import { loadMotion, mask, readTimeline, type MotionContract } from "./motion";
 
 let model: SmplxModel | null = null,
@@ -93,10 +93,10 @@ self.onmessage = async (event: MessageEvent) => {
         observed.push(mask(map, "source_observed", [c.frames]));
       }
       motion = loadedMotion;
-      const indices = model.faces.slice();
+      const jointParents = model.parents.slice();
       self.postMessage(
-        { id: r.id, faces: indices, observed },
-        { transfer: [indices.buffer] },
+        { id: r.id, jointParents, observed },
+        { transfer: [jointParents.buffer] },
       );
     } else {
       if (!model || !motion) throw new Error("人体模型尚未就绪");
@@ -108,16 +108,13 @@ self.onmessage = async (event: MessageEvent) => {
       )
         throw new Error("人体帧请求无效");
       const started = performance.now();
-      const vertexWidth = SMPLX_NUM_VERTS * 3, jointWidth = SMPLX_NUM_JOINTS * 3;
-      const vertices = new Float32Array(r.count * vertexWidth), joints = new Float32Array(r.count * jointWidth);
-      for (let i = 0; i < r.count; i++) {
-        const frame = motion.frame(model, r.first + i);
-        vertices.set(frame.vertices, i * vertexWidth);
-        joints.set(frame.joints, i * jointWidth);
-      }
+      const width = SMPLX_NUM_JOINTS * 3;
+      const joints = new Float32Array(r.count * width);
+      for (let i = 0; i < r.count; i++)
+        joints.set(motion.frame(model, r.first + i), i * width);
       self.postMessage(
-        { id: r.id, vertices, joints, computeMs: Math.round(performance.now() - started) },
-        { transfer: [vertices.buffer, joints.buffer] },
+        { id: r.id, joints, computeMs: Math.round(performance.now() - started) },
+        { transfer: [joints.buffer] },
       );
     }
   } catch (error) {
