@@ -124,25 +124,28 @@ test("reads zero-expression matrices and both MP4 types without projection data"
   expect(() => readPreview(arrays)).toThrow("动作表示不支持");
 });
 
-test("uses native-pixel calibration only for EXO proxy videos", () => {
+test("uses native-pixel calibration for EXO and EGO clean proxies", () => {
   const { arrays, metadata, update } = preview();
-  const pose = [1, 0, 0, 0.125, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+  const pose = (x: number) => [1, 0, 0, x, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
   for (let i = 0; i < 2; i++) {
     Object.assign(metadata.videos[i], { content: "clean_proxy" });
-    arrays[`preview_camera_${i}_K`] = array([3, 3], new Float64Array([30.123456789, 0, 32, 0, 30, 32, 0, 0, 1]));
-    arrays[`preview_camera_${i}_poses`] = array([2, 4, 4], new Float64Array([...pose, ...pose]));
-    arrays[`preview_camera_${i}_pose_valid`] = array([2], new Int32Array([true, false].map(Number)));
+    arrays[`preview_camera_${i}_K`] = array([3, 3], new Float64Array([30.123456789 + i, 0, 32, 0, 30, 32, 0, 0, 1]));
+    arrays[`preview_camera_${i}_poses`] = array([2, 4, 4], new Float64Array([...pose(i), ...pose(i + 0.125)]));
+    arrays[`preview_camera_${i}_pose_valid`] = array([2], new Int32Array([i, 1 - i]));
   }
   update();
   const [exo, ego] = readPreview(arrays).cameras;
   expect(exo.projectionK?.[0][0]).toBe(30.123456789);
-  expect(exo.T_world_from_camera?.[0]).toEqual([[1, 0, 0, 0.125], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]);
-  expect(exo.pose_valid).toEqual([true, false]);
-  expect(ego.projectionK).toBeUndefined();
+  expect(exo.pose_valid).toEqual([false, true]);
+  expect(ego.projectionK?.[0][0]).toBe(31.123456789);
+  expect(ego.T_world_from_camera).toEqual([1, 1.125].map(x =>
+    [[1, 0, 0, x], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]],
+  ));
+  expect(ego.pose_valid).toEqual([true, false]);
 
-  arrays.preview_camera_0_K.data[0] = 0;
-  expect(() => readPreview(arrays)).toThrow("EXO 代理视频内参无效");
-  Object.assign(metadata.videos[0], { content: "baked_projection" });
+  arrays.preview_camera_1_K.data[0] = 0;
+  expect(() => readPreview(arrays)).toThrow("代理视频内参无效：preview_camera_1_K");
+  Object.assign(metadata.videos[1], { content: "baked_projection" });
   update();
-  expect(readPreview(arrays).cameras[0].projectionK).toBeUndefined();
+  expect(readPreview(arrays).cameras[1].projectionK).toBeUndefined();
 });

@@ -2,7 +2,7 @@ import type { NdArray } from "../smplx/npy";
 import { loadMotion, mask, numeric, readTimeline, type MotionContract } from "./motion";
 import { parseDisplayUp } from "./orbitBasis";
 import type { Camera } from "./package";
-import { isExoProxy, readProxyProjection } from "./projection";
+import { readProxyProjection } from "./projection";
 
 type PreviewCamera = Omit<Camera, "url"> & {
   path: string;
@@ -67,7 +67,7 @@ export function readPreview(arrays: Record<string, NdArray>) {
       || !valid.every(n => n === 0 || n === 1)) throw new Error("视频时间轴或逐帧有效性与动作不一致");
     if (v.content !== undefined && v.content !== "clean_proxy" && v.content !== "baked_projection")
       throw new Error("可视化包视频类型不支持");
-    const projection = isExoProxy(v.kind, v.content) ? readProxyProjection(arrays, i, frames) : {};
+    const projection = v.content === "clean_proxy" ? readProxyProjection(arrays, i, frames) : {};
     return { ...projection, camera_id: v.camera_id as string, view_id: v.view_id as string, kind: v.kind as "gopro" | "ego",
       image_size: v.image_size as [number, number], video_pts_ns: videoTimes, source_observed: Array.from(valid, Boolean),
       path: `${legacy ? "previews" : "videos"}/${v.view_id.toLowerCase()}.mp4`, bytes: v.bytes as number, sha256: v.sha256 as string };

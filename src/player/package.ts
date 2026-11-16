@@ -5,7 +5,6 @@ import { parseNpz } from "../smplx/npy";
 import { readPreview } from "./preview";
 import { loadPlaybackModel, sha256Hex } from "./modelAssets";
 import type { DisplayUp } from "./orbitBasis";
-import { isExoProxy } from "./projection";
 
 export type Camera = {
   camera_id: string;
@@ -260,11 +259,11 @@ async function prepareLegacyRecording(
       const [width, height] = c.image_size;
       const calibration = c.calibration;
       let projectionK: number[][] | undefined;
-      if (isExoProxy(c.kind, c.content) && calibration?.output_domain === "undistorted") {
+      if (c.content === "clean_proxy" && calibration?.output_domain === "undistorted") {
         if (!matrix(calibration.K, 3) || calibration.K[0][0] <= 0 || calibration.K[1][1] <= 0
           || !Array.isArray(calibration.image_size) || calibration.image_size.length !== 2
           || !calibration.image_size.every((n: unknown) => integer(n) && (n as number) > 0))
-          throw new Error(`EXO 代理视频内参或分辨率无效：${c.view_id}`);
+          throw new Error(`代理视频内参或分辨率无效：${c.view_id}`);
         const [w, h] = calibration.image_size;
         projectionK = calibration.K.map((row: number[], i: number) =>
           row.map(n => n * (i === 0 ? width / w : i === 1 ? height / h : 1)),
