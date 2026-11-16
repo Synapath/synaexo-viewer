@@ -106,10 +106,14 @@ self.onmessage = async (event: MessageEvent) => {
         r.count > 8
       )
         throw new Error("人体帧请求无效");
+      const started = performance.now();
       const vertices = new Float32Array(r.count * 10475 * 3);
       for (let i = 0; i < r.count; i++)
         vertices.set(motion.frame(model, r.first + i), i * 10475 * 3);
-      self.postMessage({ id: r.id, vertices }, { transfer: [vertices.buffer] });
+      self.postMessage(
+        { id: r.id, vertices, computeMs: Math.round(performance.now() - started) },
+        { transfer: [vertices.buffer] },
+      );
     }
   } catch (error) {
     self.postMessage({ id: r.id, error: (error as Error).message });

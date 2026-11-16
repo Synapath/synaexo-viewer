@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import type { Camera, Recording } from "./package";
+import type { RecordDiagnostic } from "../lib/diagnostics";
 import { explicitOrbitDirection } from "./orbitBasis";
 
 function cameraPose(camera: Camera | undefined, frame: number) {
@@ -28,8 +29,14 @@ export function createScene(
   host: HTMLElement,
   tiles: HTMLElement[],
   descriptor: Recording,
+  diagnose: RecordDiagnostic,
 ) {
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+  const contextLost = () => diagnose("scene.webgl_context_lost", {
+    width: renderer.domElement.width, height: renderer.domElement.height,
+    textures: renderer.info.memory.textures, geometries: renderer.info.memory.geometries,
+  });
+  renderer.domElement.addEventListener("webglcontextlost", contextLost);
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   renderer.setClearColor(0x101010);
   host.prepend(renderer.domElement);
@@ -227,7 +234,7 @@ export function createScene(
       disposed = true;
       observer.disconnect();
       controls.dispose();
-      textures.forEach((t) => t.dispose());
+      textures.forEach((t) => { t.dispose(); t.image = null; });
       backgrounds.forEach((s) =>
         s.traverse((o) => {
           if (o instanceof THREE.Mesh) {
@@ -241,7 +248,9 @@ export function createScene(
       overlayMaterial.dispose();
       axes.geometry.dispose();
       (axes.material as THREE.Material).dispose();
+      renderer.domElement.removeEventListener("webglcontextlost", contextLost);
       renderer.dispose();
+      renderer.forceContextLoss();
       renderer.domElement.remove();
     },
   };

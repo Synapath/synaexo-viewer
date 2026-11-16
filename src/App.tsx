@@ -8,18 +8,21 @@ import {
 } from "react";
 import {
   ArrowLeft,
+  Download,
   FileArchive,
   FolderOpen,
   LoaderCircle,
   X,
 } from "lucide-react";
 import { openArchive, type RecordingArchive } from "./lib/archive";
+import { createDiagnostics } from "./lib/diagnostics";
 import { prepareRecording, type Recording } from "./player/package";
 const loadPlayer = () => import("./player/Player");
 const Player = lazy(loadPlayer);
 import "./App.css";
 
 export default function App() {
+  const [diagnostics] = useState(createDiagnostics);
   const [recording, setRecording] = useState<Recording | null>(null),
     [generation, setGeneration] = useState(0);
   const [error, setError] = useState(""),
@@ -40,15 +43,19 @@ export default function App() {
   );
   const fail = useCallback((source: Recording, message: string) => {
     if (current.current !== source) return;
+    diagnostics.record("app.playback_failed");
     current.current = null;
     source.dispose();
     setRecording(null);
     setError(`预览失败：${message}。请重新打开录制包。`);
-  }, []);
+  }, [diagnostics]);
   async function open(file: File) {
     pending.current?.abort();
     const controller = new AbortController();
     pending.current = controller;
+    const started = performance.now();
+    let stage = "archive";
+    diagnostics.record("app.open_started", { zipBytes: file.size });
     setLoading("正在读取录制包…");
     setError("");
     setDragging(false);
@@ -56,23 +63,34 @@ export default function App() {
     let archive: RecordingArchive | undefined;
     try {
       archive = await openArchive(file, controller.signal, () => {});
+      diagnostics.record("app.archive_read", { files: archive.assets.length });
+      stage = "player_module";
       try {
         await loadPlayer();
       } catch (cause) {
         throw new Error("播放器资源加载失败，请刷新页面后重新打开 ZIP", { cause });
       }
       controller.signal.throwIfAborted();
+      stage = "recording";
       const next = await prepareRecording(
         archive,
         controller.signal,
         (text) => {
-          if (!controller.signal.aborted) setLoading(text);
+          if (!controller.signal.aborted) {
+            diagnostics.record("app.prepare_stage", { stage: text });
+            setLoading(text);
+          }
         },
       );
       if (controller.signal.aborted) {
         next.dispose();
         return;
       }
+      archive.close();
+      diagnostics.record("app.open_completed", {
+        frames: next.frames, cameras: next.cameras.length,
+        durationMs: Math.round(performance.now() - started),
+      });
       const previous = current.current;
       current.current = next;
       previous?.dispose();
@@ -80,13 +98,19 @@ export default function App() {
       setGeneration((value) => value + 1);
     } catch (error) {
       archive?.close();
+      diagnostics.record("app.open_finished", {
+        stage, outcome: controller.signal.aborted ? "aborted" : "failed",
+        durationMs: Math.round(performance.now() - started),
+      });
       if (!controller.signal.aborted)
         setError(`无法打开录制包：${(error as Error).message}`);
     } finally {
+      if (pending.current === controller) pending.current = null;
       if (!controller.signal.aborted) setLoading("");
     }
   }
   function close() {
+    diagnostics.record("app.recording_closed");
     pending.current?.abort();
     const previous = current.current;
     current.current = null;
@@ -131,6 +155,9 @@ export default function App() {
           </span>
         </a>
         <div className="header-actions">
+          <button className="icon-button" aria-label="下载日志" title="下载日志" onClick={diagnostics.download}>
+            <Download />
+          </button>
           {recording && (
             <button
               className="icon-button"
@@ -183,6 +210,7 @@ export default function App() {
           <Player
             key={generation}
             recording={recording}
+            diagnose={diagnostics.record}
             onError={fail}
             suspended={!!loading}
           />

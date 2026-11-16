@@ -1,5 +1,6 @@
 import { containingFrame, nearestFrame, seekSeconds } from "./time";
 import type { Recording } from "./package";
+import type { RecordDiagnostic } from "../lib/diagnostics";
 
 type Output = {
   present: (
@@ -9,6 +10,7 @@ type Output = {
   ) => void;
   update: (frame: number, busy: boolean, playing: boolean) => void;
   error: (message: string) => void;
+  diagnose: RecordDiagnostic;
 };
 
 export function startPlayback(
@@ -17,6 +19,8 @@ export function startPlayback(
   output: Output,
 ) {
   const n = 10475 * 3;
+  const { diagnose } = output;
+  const playbackStartedAt = performance.now();
   const videos = descriptor.cameras.map((camera) => {
     const video = document.createElement("video");
     video.muted = true;
@@ -31,36 +35,84 @@ export function startPlayback(
   let shownImages: HTMLCanvasElement[] = [];
   const callbacks: number[] = [],
     listeners: Array<() => void> = [],
-    latest: Array<{ index: number; image: HTMLCanvasElement } | undefined> = [];
+    mediaTimeMs: number[] = [];
+  let workerJob: { first: number; count: number; revision: number; startedAt: number } | null = null;
+  let seekStartedAt: number | null = null;
   let disposed = false,
     playing = false,
     frame = 0,
     shown = -1,
     wanted: number | null = 0,
     revision = 0,
-    loading = false,
     busy = true,
     resuming = false,
-    stalledAt = performance.now();
+    stalledAt = playbackStartedAt,
+    lastStallLogAt = -Infinity;
   const pause = () => videos.forEach((video) => video.pause());
   const notify = () => output.update(frame, busy, playing);
-  const fail = (error: unknown) => {
+  function snapshot() {
+    const cameras = videos.map((video, i) => {
+      const cache = images[i], camera = descriptor.cameras[i];
+      const canvases = cache.size + Number(!!shownImages[i] && cache.get(shown) !== shownImages[i]);
+      return {
+        view: camera.view_id, width: camera.image_size[0], height: camera.image_size[1],
+        currentTimeMs: Math.round(video.currentTime * 1000), lastVideoFrameMs: mediaTimeMs[i] ?? null,
+        readyState: video.readyState, networkState: video.networkState, seeking: video.seeking, paused: video.paused,
+        ended: video.ended, cachedFrames: cache.size, targetCached: wanted === null ? null : cache.has(wanted),
+        canvasBytes: canvases * camera.image_size[0] * camera.image_size[1] * 4,
+      };
+    });
+    return {
+      frame, shown, wanted, revision, busy, playing, resuming,
+      visibility: document.visibilityState,
+      targetMeshCached: wanted === null ? null : vertices.has(wanted), meshCacheFrames: vertices.size,
+      canvasBytes: cameras.reduce((sum, camera) => sum + camera.canvasBytes, 0),
+      worker: workerJob ? { ...workerJob, elapsedMs: Math.round(performance.now() - workerJob.startedAt) } : null,
+      cameras,
+    };
+  }
+  function releaseImage(image: HTMLCanvasElement) {
+    // Drop the pixel backing store independently of when the browser runs GC.
+    image.width = 0;
+    image.height = 0;
+  }
+  function dropCachedImage(i: number, ordinal: number, image: HTMLCanvasElement) {
+    images[i].delete(ordinal);
+    if (image !== shownImages[i]) releaseImage(image);
+  }
+  function pruneImages(i: number, oldest: number) {
+    const cache = images[i];
+    for (const [ordinal, image] of cache)
+      if (ordinal < oldest || cache.size > 12) dropCachedImage(i, ordinal, image);
+  }
+  const fail = (error: unknown, stage: string) => {
     if (!disposed) {
+      const message = error instanceof Error ? error.message : String(error);
+      diagnose("playback.failed", { stage, timedOut: message.includes("超时"), ...snapshot() });
       playing = false;
       pause();
       notify();
-      output.error(error instanceof Error ? error.message : String(error));
+      output.error(message);
     }
   };
   async function fetchFrames(first: number) {
-    if (loading || disposed) return;
+    if (workerJob || disposed) return;
     const count = Math.min(8, descriptor.frames - first);
     if (count < 1) return;
-    loading = true;
-    const active = revision;
+    const job = { first, count, revision, startedAt: performance.now() };
+    workerJob = job;
+    const foreground = busy;
+    if (foreground) diagnose("playback.worker_started", job);
+    let outcome = "ready";
+    let computeMs: number | null = null;
     try {
-      const data = await descriptor.engine.frames(first, count);
-      if (disposed || active !== revision) return;
+      const result = await descriptor.engine.frames(first, count);
+      const data = result.vertices;
+      computeMs = result.computeMs;
+      if (disposed || job.revision !== revision) {
+        outcome = "superseded";
+        return;
+      }
       if (data.length !== count * n || !data.every(Number.isFinite))
         throw new Error("人体帧与当前时间不一致");
       for (let i = 0; i < count; i++)
@@ -68,10 +120,16 @@ export function startPlayback(
       for (const index of vertices.keys())
         if (index < frame - 2 || index > frame + 24) vertices.delete(index);
     } catch (error) {
-      if (active === revision) fail(error);
+      outcome = "failed";
+      if (job.revision === revision) fail(error, "worker_frames");
     } finally {
-      loading = false;
-      if (!disposed) tryPresent();
+      workerJob = null;
+      if (!disposed) {
+        const durationMs = Math.round(performance.now() - job.startedAt);
+        if (foreground || busy || durationMs >= 500 || outcome !== "ready")
+          diagnose("playback.worker_finished", { ...job, computeMs, durationMs, outcome });
+        tryPresent();
+      }
     }
   }
   function capture(index: number, stamp: number, presented = false) {
@@ -85,19 +143,24 @@ export function startPlayback(
       Math.abs(camera.video_pts_ns[ordinal] - stamp * 1e9) > 111_112
     )
       return;
+    if ((wanted !== null ? ordinal !== wanted : ordinal <= shown) || images[index].has(ordinal)) return;
     const canvas = document.createElement("canvas");
     [canvas.width, canvas.height] = camera.image_size;
     const context = canvas.getContext("2d");
     if (!context) {
-      fail(new Error("无法读取预览画面"));
+      releaseImage(canvas);
+      fail(new Error("无法读取预览画面"), "capture_canvas");
       return;
     }
-    context.drawImage(video, 0, 0, canvas.width, canvas.height);
+    try {
+      context.drawImage(video, 0, 0, canvas.width, canvas.height);
+    } catch (error) {
+      releaseImage(canvas);
+      fail(error, "capture_frame");
+      return;
+    }
     images[index].set(ordinal, canvas);
-    latest[index] = { index: ordinal, image: canvas };
-    for (const value of images[index].keys())
-      if (images[index].size > 12 || value < (wanted ?? shown) - 1)
-        images[index].delete(value);
+    pruneImages(index, wanted ?? shown);
     tryPresent();
   }
   function resume() {
@@ -111,10 +174,22 @@ export function startPlayback(
     )
       return;
     resuming = true;
+    const active = revision, startedAt = performance.now();
+    diagnose("playback.resume_started", { frame, revision: active });
     void Promise.all(videos.map((video) => video.play()))
-      .catch((error) => {
-        if ((error as Error).name !== "AbortError") fail(error);
-      })
+      .then(
+        () => { if (!disposed) diagnose("playback.resume_finished", {
+          revision: active, durationMs: Math.round(performance.now() - startedAt), outcome: "playing",
+        }); },
+        (error) => {
+          if (disposed) return;
+          const aborted = (error as Error).name === "AbortError";
+          diagnose("playback.resume_finished", {
+            revision: active, durationMs: Math.round(performance.now() - startedAt), outcome: aborted ? "aborted" : "failed",
+          });
+          if (!aborted) fail(error, "video_play");
+        },
+      )
       .finally(() => {
         resuming = false;
         if (
@@ -141,12 +216,14 @@ export function startPlayback(
     );
     if (next === undefined) return;
     if (!vertices.has(next)) {
+      if (!busy) diagnose("playback.waiting_for_mesh", { frame: next, revision, workerFirst: workerJob?.first ?? null });
       busy = true;
       pause();
       notify();
       void fetchFrames(next);
       return;
     }
+    const previous = shown, previousImages = shownImages;
     frame = next;
     shown = next;
     wanted = null;
@@ -154,6 +231,19 @@ export function startPlayback(
     stalledAt = performance.now();
     shownImages = images.map((cache) => cache.get(next)!);
     output.present(vertices.get(next)!, next, shownImages);
+    const renderMs = Math.round(performance.now() - stalledAt);
+    previousImages.forEach((image, i) => {
+      if (image !== shownImages[i] && images[i].get(previous) !== image) releaseImage(image);
+    });
+    images.forEach((_, i) => pruneImages(i, shown));
+    if (seekStartedAt !== null || previous === -1) {
+      diagnose(seekStartedAt === null ? "playback.first_frame" : "playback.seek_completed", {
+        durationMs: Math.round(performance.now() - (seekStartedAt ?? playbackStartedAt)), renderMs, ...snapshot(),
+      });
+      seekStartedAt = null;
+    } else if (renderMs >= 50) {
+      diagnose("playback.slow_render", { frame, revision, renderMs });
+    }
     notify();
     if (next >= descriptor.frames - 1) {
       playing = false;
@@ -162,11 +252,11 @@ export function startPlayback(
       return;
     }
     const upcoming = Math.max(next, ...vertices.keys()) + 1;
-    if (upcoming < descriptor.frames && upcoming - next <= 16 && !loading)
+    if (upcoming < descriptor.frames && upcoming - next <= 16 && !workerJob)
       void fetchFrames(upcoming);
     resume();
   }
-  function seek(index: number) {
+  function seek(index: number, reason: "control" | "watchdog" | "restart" = "control") {
     if (disposed) return;
     revision++;
     pause();
@@ -174,13 +264,13 @@ export function startPlayback(
     frame = wanted;
     busy = true;
     const target = wanted;
+    seekStartedAt = performance.now();
+    diagnose("playback.seek_started", { reason, target, ...snapshot() });
     vertices.clear();
     videos.forEach((video, i) => {
-      const cached =
-        images[i].get(target) ||
-        (latest[i]?.index === target ? latest[i]!.image : undefined);
-      images[i].clear();
-      if (cached) images[i].set(target, cached);
+      for (const [ordinal, image] of images[i])
+        if (ordinal !== target) dropCachedImage(i, ordinal, image);
+      if (target === shown) images[i].set(target, shownImages[i]);
       video.currentTime = seekSeconds(
         descriptor.cameras[i].video_pts_ns,
         target,
@@ -193,17 +283,24 @@ export function startPlayback(
   }
   videos.forEach((video, i) => {
     if (!video.requestVideoFrameCallback) {
-      fail(new Error("浏览器不支持视频帧回调，请使用新版 Chrome 或 Edge"));
+      fail(new Error("浏览器不支持视频帧回调，请使用新版 Chrome 或 Edge"), "video_frame_callback");
       return;
     }
     const next = (_time: number, metadata: VideoFrameCallbackMetadata) => {
       if (disposed) return;
+      mediaTimeMs[i] = Math.round(metadata.mediaTime * 1000);
       capture(i, metadata.mediaTime, true);
       callbacks[i] = video.requestVideoFrameCallback(next);
     };
     callbacks[i] = video.requestVideoFrameCallback(next);
-    const error = () => fail(new Error("代理视频加载失败，请重试"));
+    const error = () => {
+      diagnose("playback.video_error", { view: descriptor.cameras[i].view_id, code: video.error?.code ?? null });
+      fail(new Error("代理视频加载失败，请重试"), "video_decode");
+    };
     const waiting = () => {
+      diagnose("playback.video_waiting", {
+        view: descriptor.cameras[i].view_id, readyState: video.readyState, wanted, frame, revision,
+      });
       if (disposed || !playing || wanted !== null) return;
       busy = true;
       pause();
@@ -236,17 +333,17 @@ export function startPlayback(
     });
     video.load();
   });
+  diagnose("playback.started", { frames: descriptor.frames, ...snapshot() });
   const watchdog = setInterval(() => {
-    if (
-      !disposed &&
-      playing &&
-      !busy &&
-      !loading &&
-      wanted === null &&
-      performance.now() - stalledAt > 1500
-    ) {
-      stalledAt = performance.now();
-      seek(Math.min(frame + 1, descriptor.frames - 1));
+    if (disposed || (!playing && !busy)) return;
+    const now = performance.now(), elapsed = now - (seekStartedAt ?? stalledAt);
+    if (elapsed > 1500 && now - lastStallLogAt >= 1500) {
+      lastStallLogAt = now;
+      diagnose("playback.no_progress", { elapsedMs: Math.round(elapsed), ...snapshot() });
+    }
+    if (playing && !busy && !workerJob && wanted === null && elapsed > 1500) {
+      stalledAt = now;
+      seek(Math.min(frame + 1, descriptor.frames - 1), "watchdog");
     }
   }, 500);
   void fetchFrames(0);
@@ -255,13 +352,15 @@ export function startPlayback(
     seek,
     pause() {
       playing = false;
+      diagnose("playback.paused", { frame, revision });
       pause();
       notify();
     },
     toggle() {
       if (disposed) return;
       playing = !playing;
-      if (playing && frame === descriptor.frames - 1) seek(0);
+      diagnose("playback.play_command", { playing, frame, revision });
+      if (playing && frame === descriptor.frames - 1) seek(0, "restart");
       if (!playing) pause();
       else {
         tryPresent();
@@ -271,6 +370,7 @@ export function startPlayback(
     },
     dispose() {
       disposed = true;
+      const before = snapshot();
       clearInterval(watchdog);
       pause();
       videos.forEach((video, i) => {
@@ -280,8 +380,13 @@ export function startPlayback(
         video.load();
         video.remove();
       });
-      images.forEach((cache) => cache.clear());
+      images.forEach((cache, i) => {
+        for (const [ordinal, image] of cache) dropCachedImage(i, ordinal, image);
+      });
+      shownImages.forEach(releaseImage);
+      shownImages = [];
       vertices.clear();
+      diagnose("playback.disposed", { releasedCanvasBytes: before.canvasBytes, releasedMeshFrames: before.meshCacheFrames });
     },
   };
 }

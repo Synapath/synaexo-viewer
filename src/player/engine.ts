@@ -53,8 +53,8 @@ export class ForwardEngine {
       120000,
     );
   }
-  async frames(first: number, count: number): Promise<Float32Array> {
-    return (await this.call({ type: "frames", first, count })).vertices;
+  frames(first: number, count: number): Promise<{ vertices: Float32Array; computeMs: number }> {
+    return this.call({ type: "frames", first, count });
   }
   dispose(message = "人体计算线程已关闭") {
     if (this.closed) return;

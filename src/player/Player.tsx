@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { LoaderCircle, Maximize2, Minimize2, Pause, Play } from "lucide-react";
 import type { Recording } from "./package";
+import type { RecordDiagnostic } from "../lib/diagnostics";
 import { createScene } from "./scene";
 import { startPlayback } from "./playback";
 import { clock } from "./time";
@@ -9,10 +10,12 @@ import "./Player.css";
 
 export default function Player({
   recording,
+  diagnose,
   onError,
   suspended,
 }: {
   recording: Recording;
+  diagnose: RecordDiagnostic;
   onError: (recording: Recording, message: string) => void;
   suspended: boolean;
 }) {
@@ -36,6 +39,7 @@ export default function Player({
         host.current,
         tiles.current.filter((node): node is HTMLDivElement => !!node),
         recording,
+        diagnose,
       );
       playback.current = startPlayback(recording, nodes.current, {
         present: scene.present,
@@ -47,8 +51,10 @@ export default function Player({
             ready: previous.ready || !busy,
           })),
         error: (message) => onError(recording, message),
+        diagnose,
       });
     } catch (error) {
+      diagnose("player.initialization_failed");
       onError(recording, "三维预览初始化失败：" + (error as Error).message);
     }
     return () => {
@@ -56,7 +62,7 @@ export default function Player({
       playback.current = null;
       scene?.dispose();
     };
-  }, [recording, onError]);
+  }, [recording, onError, diagnose]);
   useEffect(() => {
     if (suspended) playback.current?.pause();
   }, [suspended]);
