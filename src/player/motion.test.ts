@@ -46,7 +46,7 @@ function clip() {
   return { arrays, contract };
 }
 test.each(["smplx_axis_angle", "smplx_local_rotations"] as const)(
-  "%s forward preserves shape, pose corrective, root rotation and world translation", representation => {
+  "%s forward preserves vertices and articulated joints in the result world frame", representation => {
   const matrix = representation === "smplx_local_rotations";
   const shapeDims = matrix ? 10 : 301;
   const vertices = 10475,
@@ -54,18 +54,22 @@ test.each(["smplx_axis_angle", "smplx_local_rotations"] as const)(
     posedirs = new Float32Array(vertices * 3 * 486),
     template = new Float32Array(vertices * 3),
     weights = new Float32Array(vertices * 55),
-    parents = new Int32Array(110);
+    parents = new Int32Array(110), regressor = new Float32Array(55 * vertices);
   template[3] = 1;
+  template.set([2, 2, 0], 6);
   dirs[4 * shapeDims] = 1;
   posedirs[5 * 486] = 3;
   parents[0] = -1;
+  parents[2] = 1;
+  regressor[vertices + 1] = 1;
+  regressor[2 * vertices + 2] = 1;
   for (let v = 0; v < vertices; v++) weights[v * 55] = 1;
   const model = SmplxModel.fromArrays(
     {
       v_template: array([vertices, 3], template),
       shapedirs: array([vertices, 3, shapeDims], dirs),
       posedirs: array([vertices, 3, 486], posedirs),
-      J_regressor: array([55, vertices], new Float32Array(55 * vertices)),
+      J_regressor: array([55, vertices], regressor),
       weights: array([vertices, 55], weights),
       kintree_table: array([2, 55], parents),
       f: array([1, 3], new Int32Array([0, 1, 2])),
@@ -99,10 +103,16 @@ test.each(["smplx_axis_angle", "smplx_local_rotations"] as const)(
     expect(() => loadMotion(arrays, contract)).toThrow("方向无效");
     rotations[18] = 1;
   }
-  const point = loadMotion(arrays, contract).frame(model, 0).slice(3, 6);
+  const motion = loadMotion(arrays, contract);
+  const first = motion.frame(model, 0);
+  const second = motion.frame(model, 1);
+  const point = first.vertices.slice(3, 6);
   expect(point[0]).toBeCloseTo(3, 5);
   expect(point[1]).toBeCloseTo(7, 5);
   expect(point[2]).toBeCloseTo(4, 5);
+  expect(first.joints).toHaveLength(55 * 3);
+  [5, 6, 7, 3, 7, 7, 2, 7, 7].forEach((value, i) => expect(first.joints[i]).toBeCloseTo(value, 5));
+  expect(Array.from(second.joints.slice(6, 9))).toEqual([8, 9, 8]);
 });
 test("rejects time or coordinate evidence mismatches instead of assuming an FPS or a frame", () => {
   const { arrays, contract } = clip();

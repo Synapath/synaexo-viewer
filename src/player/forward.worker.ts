@@ -1,5 +1,6 @@
 import { parseNpz } from "../smplx/npy";
 import { SmplxModel } from "../smplx/smplxModel";
+import { SMPLX_NUM_JOINTS, SMPLX_NUM_VERTS } from "../smplx/skeleton";
 import { loadMotion, mask, readTimeline, type MotionContract } from "./motion";
 
 let model: SmplxModel | null = null,
@@ -107,12 +108,16 @@ self.onmessage = async (event: MessageEvent) => {
       )
         throw new Error("人体帧请求无效");
       const started = performance.now();
-      const vertices = new Float32Array(r.count * 10475 * 3);
-      for (let i = 0; i < r.count; i++)
-        vertices.set(motion.frame(model, r.first + i), i * 10475 * 3);
+      const vertexWidth = SMPLX_NUM_VERTS * 3, jointWidth = SMPLX_NUM_JOINTS * 3;
+      const vertices = new Float32Array(r.count * vertexWidth), joints = new Float32Array(r.count * jointWidth);
+      for (let i = 0; i < r.count; i++) {
+        const frame = motion.frame(model, r.first + i);
+        vertices.set(frame.vertices, i * vertexWidth);
+        joints.set(frame.joints, i * jointWidth);
+      }
       self.postMessage(
-        { id: r.id, vertices, computeMs: Math.round(performance.now() - started) },
-        { transfer: [vertices.buffer] },
+        { id: r.id, vertices, joints, computeMs: Math.round(performance.now() - started) },
+        { transfer: [vertices.buffer, joints.buffer] },
       );
     }
   } catch (error) {

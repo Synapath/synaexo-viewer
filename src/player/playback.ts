@@ -1,10 +1,12 @@
 import { containingFrame, nearestFrame, seekSeconds } from "./time";
 import type { Recording } from "./package";
 import type { RecordDiagnostic } from "../lib/diagnostics";
+import { SMPLX_NUM_JOINTS, SMPLX_NUM_VERTS } from "../smplx/skeleton";
+import type { BodyFrame } from "./motion";
 
 type Output = {
   present: (
-    vertices: Float32Array,
+    body: BodyFrame,
     index: number,
     images: HTMLCanvasElement[],
   ) => void;
@@ -18,7 +20,7 @@ export function startPlayback(
   host: HTMLElement,
   output: Output,
 ) {
-  const n = 10475 * 3;
+  const vertexWidth = SMPLX_NUM_VERTS * 3, jointWidth = SMPLX_NUM_JOINTS * 3;
   const { diagnose } = output;
   const playbackStartedAt = performance.now();
   const videos = descriptor.cameras.map((camera) => {
@@ -31,7 +33,7 @@ export function startPlayback(
     return video;
   });
   const images = videos.map(() => new Map<number, HTMLCanvasElement>()),
-    vertices = new Map<number, Float32Array>();
+    bodyFrames = new Map<number, BodyFrame>();
   let shownImages: HTMLCanvasElement[] = [];
   const callbacks: number[] = [],
     listeners: Array<() => void> = [],
@@ -65,7 +67,7 @@ export function startPlayback(
     return {
       frame, shown, wanted, revision, busy, playing, resuming,
       visibility: document.visibilityState,
-      targetMeshCached: wanted === null ? null : vertices.has(wanted), meshCacheFrames: vertices.size,
+      targetMeshCached: wanted === null ? null : bodyFrames.has(wanted), meshCacheFrames: bodyFrames.size,
       canvasBytes: cameras.reduce((sum, camera) => sum + camera.canvasBytes, 0),
       worker: workerJob ? { ...workerJob, elapsedMs: Math.round(performance.now() - workerJob.startedAt) } : null,
       cameras,
@@ -106,19 +108,23 @@ export function startPlayback(
     let outcome = "ready";
     let computeMs: number | null = null;
     try {
-      const result = await descriptor.engine.frames(first, count);
-      const data = result.vertices;
-      computeMs = result.computeMs;
+      const { vertices, joints, computeMs: elapsed } = await descriptor.engine.frames(first, count);
+      computeMs = elapsed;
       if (disposed || job.revision !== revision) {
         outcome = "superseded";
         return;
       }
-      if (data.length !== count * n || !data.every(Number.isFinite))
+      if (vertices.length !== count * vertexWidth || joints.length !== count * jointWidth
+        || !vertices.every(Number.isFinite) || !joints.every(Number.isFinite))
         throw new Error("人体帧与当前时间不一致");
-      for (let i = 0; i < count; i++)
-        vertices.set(first + i, data.subarray(i * n, (i + 1) * n));
-      for (const index of vertices.keys())
-        if (index < frame - 2 || index > frame + 24) vertices.delete(index);
+      for (let i = 0; i < count; i++) {
+        bodyFrames.set(first + i, {
+          vertices: vertices.subarray(i * vertexWidth, (i + 1) * vertexWidth),
+          joints: joints.subarray(i * jointWidth, (i + 1) * jointWidth),
+        });
+      }
+      for (const index of bodyFrames.keys())
+        if (index < frame - 2 || index > frame + 24) bodyFrames.delete(index);
     } catch (error) {
       outcome = "failed";
       if (job.revision === revision) fail(error, "worker_frames");
@@ -215,7 +221,8 @@ export function startPlayback(
       images.every((cache) => cache.has(index)),
     );
     if (next === undefined) return;
-    if (!vertices.has(next)) {
+    const body = bodyFrames.get(next);
+    if (!body) {
       if (!busy) diagnose("playback.waiting_for_mesh", { frame: next, revision, workerFirst: workerJob?.first ?? null });
       busy = true;
       pause();
@@ -230,7 +237,7 @@ export function startPlayback(
     busy = false;
     stalledAt = performance.now();
     shownImages = images.map((cache) => cache.get(next)!);
-    output.present(vertices.get(next)!, next, shownImages);
+    output.present(body, next, shownImages);
     const renderMs = Math.round(performance.now() - stalledAt);
     previousImages.forEach((image, i) => {
       if (image !== shownImages[i] && images[i].get(previous) !== image) releaseImage(image);
@@ -251,7 +258,7 @@ export function startPlayback(
       notify();
       return;
     }
-    const upcoming = Math.max(next, ...vertices.keys()) + 1;
+    const upcoming = Math.max(next, ...bodyFrames.keys()) + 1;
     if (upcoming < descriptor.frames && upcoming - next <= 16 && !workerJob)
       void fetchFrames(upcoming);
     resume();
@@ -266,7 +273,7 @@ export function startPlayback(
     const target = wanted;
     seekStartedAt = performance.now();
     diagnose("playback.seek_started", { reason, target, ...snapshot() });
-    vertices.clear();
+    bodyFrames.clear();
     videos.forEach((video, i) => {
       for (const [ordinal, image] of images[i])
         if (ordinal !== target) dropCachedImage(i, ordinal, image);
@@ -385,7 +392,7 @@ export function startPlayback(
       });
       shownImages.forEach(releaseImage);
       shownImages = [];
-      vertices.clear();
+      bodyFrames.clear();
       diagnose("playback.disposed", { releasedCanvasBytes: before.canvasBytes, releasedMeshFrames: before.meshCacheFrames });
     },
   };

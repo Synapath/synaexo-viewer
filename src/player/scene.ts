@@ -2,6 +2,8 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import type { Camera, Recording } from "./package";
 import type { RecordDiagnostic } from "../lib/diagnostics";
+import { SMPLX_NUM_JOINTS, SMPLX_NUM_VERTS } from "../smplx/skeleton";
+import type { BodyFrame } from "./motion";
 import { explicitOrbitDirection } from "./orbitBasis";
 
 function cameraPose(camera: Camera | undefined, frame: number) {
@@ -25,6 +27,23 @@ function createProjectionCamera({ image_size: [w, h], projectionK: K }: Camera) 
   return camera;
 }
 
+function createJointTexture(host: HTMLElement) {
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = 32;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("无法绘制关节点");
+  const theme = getComputedStyle(host);
+  for (const [radius, color] of [[14, theme.getPropertyValue("--surface").trim()], [10, theme.color]] as const) {
+    context.beginPath();
+    context.arc(16, 16, radius, 0, Math.PI * 2);
+    context.fillStyle = color;
+    context.fill();
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
 export function createScene(
   host: HTMLElement,
   tiles: HTMLElement[],
@@ -43,7 +62,7 @@ export function createScene(
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute(
     "position",
-    new THREE.BufferAttribute(new Float32Array(10475 * 3), 3),
+    new THREE.BufferAttribute(new Float32Array(SMPLX_NUM_VERTS * 3), 3),
   );
   geometry.setIndex(new THREE.BufferAttribute(descriptor.faces, 1));
   const material = new THREE.MeshStandardMaterial({
@@ -54,9 +73,6 @@ export function createScene(
     depthWrite: true,
     roughness: 0.8,
   });
-  const overlayMaterial = material.clone();
-  overlayMaterial.transparent = true;
-  overlayMaterial.opacity = 0.5;
   const scene = new THREE.Scene(),
     mesh = new THREE.Mesh(geometry, material);
   mesh.frustumCulled = false;
@@ -110,6 +126,16 @@ export function createScene(
   const ortho = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
   const projectors = descriptor.cameras.map(createProjectionCamera);
   const cameraAxes = new THREE.Matrix4().makeScale(1, -1, -1);
+  const jointScene = new THREE.Scene(), jointGeometry = new THREE.BufferGeometry();
+  const jointPositions = new THREE.BufferAttribute(new Float32Array(SMPLX_NUM_JOINTS * 3), 3);
+  jointGeometry.setAttribute("position", jointPositions.setUsage(THREE.DynamicDrawUsage));
+  const jointTexture = createJointTexture(host);
+  const jointMaterial = new THREE.PointsMaterial({
+    map: jointTexture, sizeAttenuation: false, alphaTest: 0.5, depthTest: false, depthWrite: false,
+  });
+  const points = new THREE.Points(jointGeometry, jointMaterial);
+  points.frustumCulled = false;
+  jointScene.add(points);
   const axes = new THREE.AxesHelper(0.5);
   scene.add(axes);
   let current = -1,
@@ -143,9 +169,7 @@ export function createScene(
       if (!index) {
         orbitCamera.aspect = width / height;
         orbitCamera.updateProjectionMatrix();
-        mesh.material = material;
         mesh.visible = descriptor.body_observed[current];
-        axes.visible = true;
         renderer.render(scene, orbitCamera);
         return;
       }
@@ -163,12 +187,9 @@ export function createScene(
         rows[3][0], rows[3][1], rows[3][2], rows[3][3],
       ).multiply(cameraAxes);
       projector.matrixWorldNeedsUpdate = true;
-      renderer.clearDepth();
-      mesh.material = overlayMaterial;
-      mesh.visible = true;
-      axes.visible = false;
+      jointMaterial.size = THREE.MathUtils.clamp(width / 120, 4, 8);
       renderer.autoClear = false;
-      renderer.render(scene, projector);
+      renderer.render(jointScene, projector);
       renderer.autoClear = true;
     });
   }
@@ -184,13 +205,15 @@ export function createScene(
   resize();
   return {
     present(
-      vertices: Float32Array,
+      { vertices, joints }: BodyFrame,
       index: number,
       images: HTMLCanvasElement[],
     ) {
       const attr = geometry.getAttribute("position") as THREE.BufferAttribute;
       (attr.array as Float32Array).set(vertices);
       attr.needsUpdate = true;
+      (jointPositions.array as Float32Array).set(joints);
+      jointPositions.needsUpdate = true;
       geometry.computeVertexNormals();
       geometry.computeBoundingSphere();
       current = index;
@@ -245,7 +268,10 @@ export function createScene(
       );
       geometry.dispose();
       material.dispose();
-      overlayMaterial.dispose();
+      jointGeometry.dispose();
+      jointMaterial.dispose();
+      jointTexture.dispose();
+      jointTexture.image.width = jointTexture.image.height = 0;
       axes.geometry.dispose();
       (axes.material as THREE.Material).dispose();
       renderer.domElement.removeEventListener("webglcontextlost", contextLost);
