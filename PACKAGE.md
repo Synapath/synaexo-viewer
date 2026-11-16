@@ -139,11 +139,11 @@ synaexo-delivery-<内容摘要>/                    # 整套文件路径与摘�
 | `preview_video_pts_ns` | `[V,N]` 各路 MP4 的相对纳秒 PTS |
 | `preview_source_observed` | `[V,N]` 各路视频逐帧来源有效性 |
 
-`preview_metadata.display_up` 可选，填写由来源证据换算到动作坐标系的三个有限数字，且不能全为零。Viewer 将其归一化，仅调整独立三维视图的观看方向，不旋转人体坐标，也不改变外参、视频投影或时间轴。缺失时沿用原有视角行为，不从设备名称推断坐标轴。
+`preview_metadata.display_up` 可选，填写由来源证据换算到动作坐标系的三个有限数字，且不能全为零。Viewer 将其归一化，仅调整独立三维视图的观看方向。缺失时沿用原有视角行为。
 
 主时间轴和视频 PTS 必须精确、严格递增，并在解析器允许的容器时间基误差内一致。人体部分缺失时需要逐帧 mask；仅在来源明确声明全帧有效时才能由总数生成全有效 mask。缺失观测不会当作有效数据，源 `physical_accuracy_passed` 状态保持不变。
 
-Worker 由动作参数生成三维人体。`baked_projection` 直接显示视频，历史轴角包省略视频类型时沿用这一行为。矩阵包的各路 `clean_proxy` 使用 NPZ 内的 `preview_camera_<i>_K[3,3]`（代理视频像素内参）、`preview_camera_<i>_poses[N,4,4]`（相机到世界坐标的逐帧变换）和 `preview_camera_<i>_pose_valid[N]` 投影人体。人体、视频来源和相机位姿都有效的帧才显示叠加。
+Worker 由动作参数生成独立三维人体。`clean_proxy`、`baked_projection` 和省略视频类型的旧包均直接显示包内 MP4。Viewer 不实时向视频投影人体，回放不依赖动作 NPZ 中的相机投影数组。
 
 ## 包内模型
 

@@ -3,8 +3,7 @@ import { loadMotion, mask, numeric, readTimeline, type MotionContract } from "./
 import { parseDisplayUp } from "./orbitBasis";
 import type { Camera } from "./package";
 
-type PreviewCamera = Omit<Camera, "url" | "T_world_from_camera"> & {
-  T_world_from_camera?: number[][][];
+type PreviewCamera = Omit<Camera, "url" | "T_world_from_camera" | "pose_valid"> & {
   path: string;
   bytes: number;
   sha256: string;
@@ -65,13 +64,9 @@ export function readPreview(arrays: Record<string, NdArray>) {
       valid = observed.subarray(i * frames, (i + 1) * frames);
     if (!videoTimes.every((n, f) => integer(n) && n >= 0 && (!f || n > videoTimes[f - 1]) && Math.abs(n - times[f]) <= 11112)
       || !valid.every(n => n === 0 || n === 1)) throw new Error("视频时间轴或逐帧有效性与动作不一致");
-    if (matrix && v.content !== "clean_proxy")
-      throw new Error("最终矩阵包必须声明代理视频与投影");
     if (v.content !== undefined && v.content !== "clean_proxy" && v.content !== "baked_projection")
       throw new Error("可视化包视频类型不支持");
-    const baked = v.content !== "clean_proxy";
-    const projection = baked ? {} : readProjection(arrays, i, frames);
-    return { ...projection, baked, camera_id: v.camera_id as string, view_id: v.view_id as string, kind: v.kind as "gopro" | "ego",
+    return { camera_id: v.camera_id as string, view_id: v.view_id as string, kind: v.kind as "gopro" | "ego",
       image_size: v.image_size as [number, number], video_pts_ns: videoTimes, source_observed: Array.from(valid, Boolean),
       path: `${legacy ? "previews" : "videos"}/${v.view_id.toLowerCase()}.mp4`, bytes: v.bytes as number, sha256: v.sha256 as string };
   });
@@ -79,23 +74,4 @@ export function readPreview(arrays: Record<string, NdArray>) {
     modelHash: model.sha256 as string,
     sourceModelHash: legacy ? undefined : model.source_sha256 as string,
     modelBytes: legacy ? undefined : model.bytes as number };
-}
-
-function readProjection(arrays: Record<string, NdArray>, camera: number, frames: number) {
-  const prefix = `preview_camera_${camera}`;
-  // Intrinsics in the NPZ already use the proxy video's pixel dimensions.
-  const intrinsics = numeric(arrays, `${prefix}_K`, [3, 3]);
-  if (intrinsics[0] <= 0 || intrinsics[4] <= 0 || intrinsics[6] !== 0 || intrinsics[7] !== 0 || intrinsics[8] !== 1)
-    throw new Error(`相机投影 ${prefix}_K 无效`);
-  const K = Array.from({ length: 3 }, (_, row) => Array.from(intrinsics.subarray(row * 3, (row + 1) * 3)));
-  const poses = numeric(arrays, `${prefix}_poses`, [frames, 4, 4]);
-  const pose_valid = mask(arrays, `${prefix}_pose_valid`, [frames]);
-  const T_world_from_camera = Array.from({ length: frames }, (_, frame) => {
-    const offset = frame * 16;
-    const lastRow = poses.subarray(offset + 12, offset + 16);
-    if (!lastRow.every((n, col) => Math.abs(n - Number(col === 3)) < 1e-6))
-      throw new Error(`相机变换 ${prefix}_poses 无效`);
-    return Array.from({ length: 4 }, (_, row) => Array.from(poses.subarray(offset + row * 4, offset + (row + 1) * 4)));
-  });
-  return { K, T_world_from_camera, pose_valid };
 }

@@ -26,14 +26,6 @@ export function createScene(
     depthWrite: true,
     roughness: 0.8,
   });
-  const overlayMaterial = new THREE.MeshStandardMaterial({
-    color: 0xffffff,
-    transparent: true,
-    opacity: 0.5,
-    side: THREE.DoubleSide,
-    depthWrite: true,
-    roughness: 0.8,
-  });
   const scene = new THREE.Scene(),
     mesh = new THREE.Mesh(geometry, material);
   mesh.frustumCulled = false;
@@ -70,7 +62,6 @@ export function createScene(
     );
   const controls = new OrbitControls(orbitCamera, tiles[0]);
   controls.enableDamping = false;
-  const cameras = descriptor.cameras.map(() => new THREE.PerspectiveCamera());
   const textures = descriptor.cameras.map(() => new THREE.Texture());
   const backgrounds = textures.map((texture) => {
     texture.colorSpace = THREE.SRGBColorSpace;
@@ -96,8 +87,6 @@ export function createScene(
     fitted = false,
     disposed = false;
   const lastCenter = new THREE.Vector3();
-  const pose = new THREE.Matrix4(),
-    flip = new THREE.Matrix4().makeScale(1, -1, -1);
   function draw() {
     if (disposed || current < 0) return;
     const area = host.getBoundingClientRect();
@@ -125,77 +114,12 @@ export function createScene(
       if (!index) {
         orbitCamera.aspect = width / height;
         orbitCamera.updateProjectionMatrix();
-        mesh.material = material;
         mesh.visible = descriptor.body_observed[current];
-        axes.visible = true;
         renderer.render(scene, orbitCamera);
         return;
       }
-      const config = descriptor.cameras[index - 1],
-        camera = cameras[index - 1];
-      if (config.source_observed[current])
+      if (descriptor.cameras[index - 1].source_observed[current])
         renderer.render(backgrounds[index - 1], ortho);
-      renderer.clearDepth();
-      if (config.baked || !config.T_world_from_camera || !config.K ||
-          !config.pose_valid?.[current] || !descriptor.body_observed[current] ||
-          !config.source_observed[current]) return;
-      const rows =
-        typeof config.T_world_from_camera[0][0] === "number"
-          ? (config.T_world_from_camera as number[][])
-          : (config.T_world_from_camera as number[][][])[current];
-      pose.set(
-        ...(rows.flat() as [
-          number,
-          number,
-          number,
-          number,
-          number,
-          number,
-          number,
-          number,
-          number,
-          number,
-          number,
-          number,
-          number,
-          number,
-          number,
-          number,
-        ]),
-      );
-      camera.matrixAutoUpdate = false;
-      camera.matrix.copy(pose).multiply(flip);
-      camera.matrixWorld.copy(camera.matrix);
-      camera.matrixWorldInverse.copy(camera.matrixWorld).invert();
-      const [w, h] = config.image_size,
-        K = config.K,
-        n = 0.01,
-        f = 1000;
-      camera.projectionMatrix.set(
-        (2 * K[0][0]) / w,
-        (-2 * K[0][1]) / w,
-        1 - (2 * K[0][2]) / w,
-        0,
-        0,
-        (2 * K[1][1]) / h,
-        (2 * K[1][2]) / h - 1,
-        0,
-        0,
-        0,
-        -(f + n) / (f - n),
-        (-2 * f * n) / (f - n),
-        0,
-        0,
-        -1,
-        0,
-      );
-      camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
-      mesh.material = overlayMaterial;
-      mesh.visible = true;
-      axes.visible = false;
-      renderer.autoClear = false;
-      renderer.render(scene, camera);
-      renderer.autoClear = true;
     });
   }
   function resize() {
@@ -271,7 +195,6 @@ export function createScene(
       );
       geometry.dispose();
       material.dispose();
-      overlayMaterial.dispose();
       axes.geometry.dispose();
       (axes.material as THREE.Material).dispose();
       renderer.dispose();

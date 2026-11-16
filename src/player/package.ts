@@ -11,13 +11,11 @@ export type Camera = {
   view_id: string;
   kind: "gopro" | "ego";
   image_size: [number, number];
-  K?: number[][];
   T_world_from_camera?: number[][] | number[][][];
   pose_valid?: boolean[];
   source_observed: boolean[];
   video_pts_ns: number[];
   url: string;
-  baked: boolean;
 };
 export type Recording = {
   frames: number;
@@ -229,8 +227,7 @@ async function prepareLegacyRecording(
       maps: ArrayBuffer[] = [];
     progress("正在校验相机与视频…");
     for (const value of inputs) {
-      const c = object(value),
-        calibration = object(c.calibration);
+      const c = object(value);
       if (
         typeof c.camera_id !== "string" ||
         !c.camera_id ||
@@ -253,29 +250,11 @@ async function prepareLegacyRecording(
         !c.image_size.every(
           (n: unknown) =>
             integer(n) && (n as number) > 0 && (n as number) <= 8192,
-        ) ||
-        !matrix(calibration.K, 3) ||
-        !Array.isArray(calibration.image_size) ||
-        calibration.image_size.length !== 2 ||
-        !calibration.image_size.every(
-          (n: unknown) => integer(n) && (n as number) > 0,
         )
       )
-        throw new Error("相机内参或分辨率无效");
+        throw new Error("相机视频分辨率无效");
       if (!["baked_projection", "clean_proxy"].includes(c.content))
         throw new Error("视频必须明确标记为已有叠加或干净代理");
-      if (
-        c.content === "clean_proxy" &&
-        calibration.output_domain !== "undistorted"
-      )
-        throw new Error("干净代理叠加需要已去畸变的视频和内参");
-      const [width, height] = c.image_size,
-        scaleX = width / calibration.image_size[0],
-        scaleY = height / calibration.image_size[1];
-      const K = calibration.K.map((row: number[], i: number) =>
-        row.map((n) => n * (i === 0 ? scaleX : i === 1 ? scaleY : 1)),
-      );
-      if (K[0][0] <= 0 || K[1][1] <= 0) throw new Error("相机焦距无效");
       const buffer = await read(c.video),
         url = URL.createObjectURL(new Blob([buffer], { type: "video/mp4" }));
       urls.push(url);
@@ -284,14 +263,12 @@ async function prepareLegacyRecording(
         camera_id: c.camera_id,
         view_id: c.view_id,
         kind: c.kind,
-        image_size: [width, height],
-        K,
+        image_size: [c.image_size[0], c.image_size[1]],
         T_world_from_camera: pose(c.T_world_from_camera, p.frames),
         pose_valid: booleans(c.pose_valid, p.frames, c.view_id),
         source_observed: [],
         video_pts_ns: validateTimes(c.video_pts_ns, p.frames, c.view_id),
         url,
-        baked: c.content === "baked_projection",
       });
     }
     if (typeof model.path !== "string") throw new Error("录制清单缺少模型路径");

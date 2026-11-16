@@ -36,7 +36,6 @@ test("bundled preview preserves EXO/EGO identities, exact times and missing-fram
   expect(p.displayUp).toBeUndefined();
   expect(p.contract.times).toEqual([0, 33_333_333]);
   expect(p.contract.representation).toBe("smplx_axis_angle");
-  expect(p.cameras.every(v => v.baked)).toBe(true);
   expect(p.body).toEqual([true, false]);
   expect(p.cameras.map(v => [v.path, v.source_observed])).toEqual([
     ["videos/exo01.mp4", [false, true]], ["videos/ego01.mp4", [true, false]],
@@ -96,7 +95,7 @@ test("rejects guessed or imprecise video timing and fabricated validity", () => 
   expect(() => readPreview(arrays)).toThrow("时间证据");
 });
 
-test("reads final matrices and calibrated proxies without axis-angle fields", () => {
+test("reads zero-expression matrices and both MP4 types without projection data", () => {
   const { arrays, metadata, update } = preview();
   metadata.model.num_betas = 10;
   metadata.model.num_expression = 0;
@@ -109,30 +108,17 @@ test("reads final matrices and calibrated proxies without axis-angle fields", ()
   arrays.joint_rotations = array([2, 55, 3, 3], rotations);
   arrays.hand_accepted = array([2, 2], new Int32Array(4));
   arrays.hand_view_count = array([2, 2], new Int32Array(4));
-  const identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
-  const shifted = identity.slice();
-  shifted[3] = 0.125;
-  for (let i = 0; i < 2; i++) {
-    Object.assign(metadata.videos[i], { content: "clean_proxy" });
-    arrays[`preview_camera_${i}_K`] = array([3, 3], new Float64Array([30.123456789, 0, 32, 0, 30, 32, 0, 0, 1]));
-    arrays[`preview_camera_${i}_poses`] = array([2, 4, 4], new Float64Array([...identity, ...(i ? shifted : identity)]));
-    arrays[`preview_camera_${i}_pose_valid`] = array([2], new Int32Array([1, i ? 1 : 0]));
-  }
+  Object.assign(metadata.videos[0], { content: "clean_proxy" });
+  Object.assign(metadata.videos[1], { content: "baked_projection" });
   const representation = "smplx_local_rotations";
   update({ representation, display_up: [-1, 0, 0] });
   const parsed = readPreview(arrays);
-  expect(parsed.contract.representation).toBe(representation);
+  expect(parsed.contract).toMatchObject({ representation, numExpression: 0 });
   expect(parsed.displayUp).toEqual([-1, 0, 0]);
-  expect(parsed.cameras.every(v => !v.baked)).toBe(true);
-  expect(parsed.cameras[0].K?.[0][0]).toBe(30.123456789);
-  expect(parsed.cameras[0].pose_valid).toEqual([true, false]);
-  expect(parsed.cameras[1].T_world_from_camera?.[1][0][3]).toBe(0.125);
-
-  delete arrays.preview_camera_0_K;
-  expect(() => readPreview(arrays)).toThrow("preview_camera_0_K");
-  Object.assign(metadata.videos[0], { content: "baked_projection" });
-  update({ representation });
-  expect(() => readPreview(arrays)).toThrow("必须声明代理视频");
+  expect(parsed.cameras.map(v => [v.path, v.video_pts_ns, v.source_observed])).toEqual([
+    ["videos/exo01.mp4", [0, 33_333_333], [false, true]],
+    ["videos/ego01.mp4", [0, 33_333_333], [true, false]],
+  ]);
   update({ representation: "unsupported" });
   expect(() => readPreview(arrays)).toThrow("动作表示不支持");
 });
