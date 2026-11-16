@@ -121,6 +121,10 @@ test.each(["smplx_axis_angle", "smplx_local_rotations"] as const)(
   [-2, 1, -3].forEach((value, i) => expect(mesh[3 + i]).toBeCloseTo(value, 5));
   const translation = [5, 6, 7];
   expect(first).toEqual(Float32Array.from(model.posedJoints, (value, i) => value + translation[i % 3]));
+  const expectedVertices = Float32Array.from(mesh, (value, i) => value + translation[i % 3]);
+  const replayVertices = new Float32Array(mesh.length);
+  expect(motion.frame(model, 0, replayVertices)).toEqual(first);
+  expect(replayVertices).toEqual(expectedVertices);
 });
 test("rejects time or coordinate evidence mismatches instead of assuming an FPS or a frame", () => {
   const { arrays, contract } = clip();

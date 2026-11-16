@@ -1,5 +1,12 @@
 import type { NdArray } from "../smplx/npy";
+import type { Camera } from "./package";
 import { mask, numeric } from "./motion";
+
+export function cameraPose(camera: Camera | undefined, frame: number) {
+  const poses = camera?.T_world_from_camera;
+  if (!poses) return;
+  return typeof poses[0][0] === "number" ? poses as number[][] : (poses as number[][][])[frame];
+}
 
 export function readProxyProjection(arrays: Record<string, NdArray>, camera: number, frames: number) {
   const prefix = `preview_camera_${camera}`;

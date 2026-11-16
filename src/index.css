@@ -6,15 +6,21 @@
     "Segoe UI",
     "PingFang SC",
     sans-serif;
-  color: #ededed;
+  color: var(--foreground);
   background: #101010;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   --border: #2b2b2b;
+  --foreground: #ededed;
   --muted: #929292;
   --surface: #181818;
   --radius: 12px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
 }
 * {
   box-sizing: border-box;

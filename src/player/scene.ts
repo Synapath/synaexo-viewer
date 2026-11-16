@@ -5,12 +5,9 @@ import { LineSegmentsGeometry } from "three/addons/lines/LineSegmentsGeometry.js
 import type { Camera, Recording } from "./package";
 import type { RecordDiagnostic } from "../lib/diagnostics";
 import { SMPLX_NUM_JOINTS } from "../smplx/skeleton";
-
-function cameraPose(camera: Camera | undefined, frame: number) {
-  const poses = camera?.T_world_from_camera;
-  if (!poses) return;
-  return typeof poses[0][0] === "number" ? poses as number[][] : (poses as number[][][])[frame];
-}
+import type { BodyFrame } from "./engine";
+import { createMeshScene } from "./meshScene";
+import { cameraPose } from "./projection";
 
 function createProjectionCamera({ image_size: [w, h], projectionK: K }: Camera) {
   if (!K) return;
@@ -103,12 +100,25 @@ export function createScene(
   points.renderOrder = 1;
   jointScene.add(bones, points);
   let current = -1, disposed = false;
+  let mesh: ReturnType<typeof createMeshScene> | undefined;
+  function viewport(x: number, y: number, width: number, height: number) {
+    renderer.setViewport(x, y, width, height);
+    renderer.setScissor(x, y, width, height);
+    renderer.clear();
+  }
   function draw() {
     if (disposed || current < 0) return;
     const area = host.getBoundingClientRect();
     renderer.setScissorTest(false);
     renderer.clear();
     renderer.setScissorTest(true);
+    if (mesh) {
+      const box = mesh.viewport.getBoundingClientRect();
+      if (box.width > 0 && box.height > 0) {
+        viewport(box.left - area.left, area.bottom - box.bottom, box.width, box.height);
+        mesh.drawOrbit(box.width, box.height);
+      }
+    }
     tiles.forEach((tile, index) => {
       const box = tile.getBoundingClientRect();
       const config = descriptor.cameras[index];
@@ -118,9 +128,7 @@ export function createScene(
       const x = box.left - area.left + (box.width - width) / 2;
       const y = area.bottom - box.bottom + (box.height - height) / 2;
       if (width <= 0 || height <= 0) return;
-      renderer.setViewport(x, y, width, height);
-      renderer.setScissor(x, y, width, height);
-      renderer.clear();
+      viewport(x, y, width, height);
       if (!config.source_observed[current]) return;
       renderer.render(backgrounds[index], ortho);
       const projector = projectors[index];
@@ -138,7 +146,8 @@ export function createScene(
       boneMaterial.resolution.set(width, height);
       boneMaterial.linewidth = Math.max(1.5, jointMaterial.size / 4);
       renderer.autoClear = false;
-      renderer.render(jointScene, projector);
+      if (mesh) mesh.drawOverlay(projector);
+      else renderer.render(jointScene, projector);
       renderer.autoClear = true;
     });
   }
@@ -152,8 +161,18 @@ export function createScene(
   tiles.forEach((tile) => observer.observe(tile));
   resize();
   return {
+    setMeshViewport(element: HTMLElement | null) {
+      if ((mesh?.viewport ?? null) === element) return;
+      if (mesh) {
+        observer.unobserve(mesh.viewport);
+        mesh.dispose();
+      }
+      mesh = element ? createMeshScene(renderer, element, descriptor, draw) : undefined;
+      if (element) observer.observe(element);
+      resize();
+    },
     present(
-      joints: Float32Array,
+      { joints, vertices }: BodyFrame,
       index: number,
       images: HTMLCanvasElement[],
     ) {
@@ -170,11 +189,13 @@ export function createScene(
         textures[i].image = image;
         textures[i].needsUpdate = true;
       });
+      if (mesh && vertices) mesh.present(vertices, index);
       draw();
     },
     dispose() {
       disposed = true;
       observer.disconnect();
+      mesh?.dispose();
       textures.forEach((t) => { t.dispose(); t.image = null; });
       backgrounds.forEach((s) =>
         s.traverse((o) => {

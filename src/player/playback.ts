@@ -1,11 +1,13 @@
 import { containingFrame, nearestFrame, seekSeconds } from "./time";
 import type { Recording } from "./package";
 import type { RecordDiagnostic } from "../lib/diagnostics";
-import { SMPLX_NUM_JOINTS } from "../smplx/skeleton";
+import { SMPLX_NUM_JOINTS, SMPLX_NUM_VERTS } from "../smplx/skeleton";
+import type { BodyFrame } from "./engine";
+import type { DisplayMode } from "./displayMode";
 
 type Output = {
   present: (
-    joints: Float32Array,
+    body: BodyFrame,
     index: number,
     images: HTMLCanvasElement[],
   ) => void;
@@ -18,8 +20,10 @@ export function startPlayback(
   descriptor: Recording,
   host: HTMLElement,
   output: Output,
+  mode: DisplayMode,
 ) {
   const jointWidth = SMPLX_NUM_JOINTS * 3;
+  const vertexWidth = SMPLX_NUM_VERTS * 3;
   const { diagnose } = output;
   const playbackStartedAt = performance.now();
   const videos = descriptor.cameras.map((camera) => {
@@ -32,7 +36,7 @@ export function startPlayback(
     return video;
   });
   const images = videos.map(() => new Map<number, HTMLCanvasElement>()),
-    jointFrames = new Map<number, Float32Array>();
+    bodyFrames = new Map<number, BodyFrame>();
   let shownImages: HTMLCanvasElement[] = [];
   const callbacks: number[] = [],
     listeners: Array<() => void> = [],
@@ -64,9 +68,9 @@ export function startPlayback(
       };
     });
     return {
-      frame, shown, wanted, revision, busy, playing, resuming,
+      frame, shown, wanted, revision, busy, playing, resuming, mode,
       visibility: document.visibilityState,
-      targetJointsCached: wanted === null ? null : jointFrames.has(wanted), jointCacheFrames: jointFrames.size,
+      targetJointsCached: wanted === null ? null : bodyFrames.has(wanted), jointCacheFrames: bodyFrames.size,
       canvasBytes: cameras.reduce((sum, camera) => sum + camera.canvasBytes, 0),
       worker: workerJob ? { ...workerJob, elapsedMs: Math.round(performance.now() - workerJob.startedAt) } : null,
       cameras,
@@ -100,25 +104,30 @@ export function startPlayback(
     if (workerJob || disposed) return;
     const count = Math.min(8, descriptor.frames - first);
     if (count < 1) return;
-    const job = { first, count, revision, startedAt: performance.now() };
+    const mesh = mode === "mesh";
+    const job = { first, count, revision, mode, startedAt: performance.now() };
     workerJob = job;
     const foreground = busy;
     if (foreground) diagnose("playback.worker_started", job);
     let outcome = "ready";
     let computeMs: number | null = null;
     try {
-      const { joints, computeMs: elapsed } = await descriptor.engine.frames(first, count);
+      const { joints, vertices, computeMs: elapsed } = await descriptor.engine.frames(first, count, mesh);
       computeMs = elapsed;
       if (disposed || job.revision !== revision) {
         outcome = "superseded";
         return;
       }
-      if (joints.length !== count * jointWidth || !joints.every(Number.isFinite))
+      if (joints.length !== count * jointWidth || !joints.every(Number.isFinite)
+        || (mesh && (vertices?.length !== count * vertexWidth || !vertices.every(Number.isFinite))))
         throw new Error("人体帧与当前时间不一致");
       for (let i = 0; i < count; i++)
-        jointFrames.set(first + i, joints.subarray(i * jointWidth, (i + 1) * jointWidth));
-      for (const index of jointFrames.keys())
-        if (index < frame - 2 || index > frame + 24) jointFrames.delete(index);
+        bodyFrames.set(first + i, {
+          joints: joints.subarray(i * jointWidth, (i + 1) * jointWidth),
+          vertices: vertices?.subarray(i * vertexWidth, (i + 1) * vertexWidth),
+        });
+      for (const index of bodyFrames.keys())
+        if (index < frame - 2 || index > frame + 24) bodyFrames.delete(index);
     } catch (error) {
       outcome = "failed";
       if (job.revision === revision) fail(error, "worker_frames");
@@ -215,9 +224,9 @@ export function startPlayback(
       images.every((cache) => cache.has(index)),
     );
     if (next === undefined) return;
-    const joints = jointFrames.get(next);
-    if (!joints) {
-      if (!busy) diagnose("playback.waiting_for_joints", { frame: next, revision, workerFirst: workerJob?.first ?? null });
+    const body = bodyFrames.get(next);
+    if (!body) {
+      if (!busy) diagnose("playback.waiting_for_body", { frame: next, revision, mode, workerFirst: workerJob?.first ?? null });
       busy = true;
       pause();
       notify();
@@ -231,7 +240,7 @@ export function startPlayback(
     busy = false;
     stalledAt = performance.now();
     shownImages = images.map((cache) => cache.get(next)!);
-    output.present(joints, next, shownImages);
+    output.present(body, next, shownImages);
     const renderMs = Math.round(performance.now() - stalledAt);
     previousImages.forEach((image, i) => {
       if (image !== shownImages[i] && images[i].get(previous) !== image) releaseImage(image);
@@ -252,12 +261,12 @@ export function startPlayback(
       notify();
       return;
     }
-    const upcoming = Math.max(next, ...jointFrames.keys()) + 1;
+    const upcoming = Math.max(next, ...bodyFrames.keys()) + 1;
     if (upcoming < descriptor.frames && upcoming - next <= 16 && !workerJob)
       void fetchFrames(upcoming);
     resume();
   }
-  function seek(index: number, reason: "control" | "watchdog" | "restart" = "control") {
+  function seek(index: number, reason: "control" | "watchdog" | "restart" | "display_mode" = "control") {
     if (disposed) return;
     revision++;
     pause();
@@ -267,7 +276,7 @@ export function startPlayback(
     const target = wanted;
     seekStartedAt = performance.now();
     diagnose("playback.seek_started", { reason, target, ...snapshot() });
-    jointFrames.clear();
+    bodyFrames.clear();
     videos.forEach((video, i) => {
       for (const [ordinal, image] of images[i])
         if (ordinal !== target) dropCachedImage(i, ordinal, image);
@@ -351,6 +360,12 @@ export function startPlayback(
   notify();
   return {
     seek,
+    setMode(next: DisplayMode) {
+      if (disposed || next === mode) return;
+      mode = next;
+      diagnose("playback.display_mode", { frame, mode });
+      seek(frame, "display_mode");
+    },
     pause() {
       playing = false;
       diagnose("playback.paused", { frame, revision });
@@ -386,7 +401,7 @@ export function startPlayback(
       });
       shownImages.forEach(releaseImage);
       shownImages = [];
-      jointFrames.clear();
+      bodyFrames.clear();
       diagnose("playback.disposed", { releasedCanvasBytes: before.canvasBytes, releasedJointFrames: before.jointCacheFrames });
     },
   };

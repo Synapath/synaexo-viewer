@@ -11,3 +11,12 @@ export function parseDisplayUp(value: unknown): DisplayUp | undefined {
   const length = Math.hypot(axisX, axisY, axisZ);
   return [axisX / length, axisY / length, axisZ / length];
 }
+import type { Vector3 } from "three";
+
+
+export function explicitOrbitDirection(up: Vector3): Vector3 {
+  const direction = up.clone().set(2, 0, 3).projectOnPlane(up);
+  if (direction.lengthSq() < 1e-12)
+    direction.set(0, 1, 0).projectOnPlane(up);
+  return direction.setLength(Math.sqrt(13)).add(up);
+}

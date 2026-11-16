@@ -1,46 +1,63 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { LoaderCircle, Maximize2, Minimize2, Pause, Play } from "lucide-react";
 import type { Recording } from "./package";
 import type { RecordDiagnostic } from "../lib/diagnostics";
+import type { DisplayMode } from "./displayMode";
 import { createScene } from "./scene";
 import { startPlayback } from "./playback";
 import { clock } from "./time";
 import { viewColumns } from "./layout";
 import "./Player.css";
 
+const MESH_VIEW = "SMPL-X";
+
 export default function Player({
   recording,
+  mode,
   diagnose,
   onError,
   suspended,
 }: {
   recording: Recording;
+  mode: DisplayMode;
   diagnose: RecordDiagnostic;
   onError: (recording: Recording, message: string) => void;
   suspended: boolean;
 }) {
   const host = useRef<HTMLDivElement>(null),
     nodes = useRef<HTMLDivElement>(null),
-    tiles = useRef<(HTMLDivElement | null)[]>([]);
+    tiles = useRef(new Map<string, HTMLDivElement>()),
+    meshViewport = useRef<HTMLDivElement>(null),
+    sceneHandle = useRef<ReturnType<typeof createScene> | null>(null),
+    modeRef = useRef(mode);
   const playback = useRef<ReturnType<typeof startPlayback> | null>(null);
-  const [focused, setFocused] = useState<number | null>(null);
-  const focusButtons = useRef<(HTMLButtonElement | null)[]>([]);
+  const [focusedView, setFocused] = useState<string | null>(null);
+  const focused = mode === "skeleton" && focusedView === MESH_VIEW ? null : focusedView;
+  if (focusedView !== focused) setFocused(focused);
+  const focusButtons = useRef(new Map<string, HTMLButtonElement>());
   const [state, setState] = useState({
     frame: 0,
     busy: true,
     playing: false,
     ready: false,
   });
+  useLayoutEffect(() => {
+    modeRef.current = mode;
+    sceneHandle.current?.setMeshViewport(meshViewport.current);
+    playback.current?.setMode(mode);
+  }, [mode]);
   useEffect(() => {
     if (!host.current || !nodes.current) return;
     let scene: ReturnType<typeof createScene> | undefined;
     try {
       scene = createScene(
         host.current,
-        tiles.current.filter((node): node is HTMLDivElement => !!node),
+        recording.cameras.map(camera => tiles.current.get(camera.view_id)!),
         recording,
         diagnose,
       );
+      sceneHandle.current = scene;
+      scene.setMeshViewport(meshViewport.current);
       playback.current = startPlayback(recording, nodes.current, {
         present: scene.present,
         update: (frame, busy, playing) =>
@@ -52,7 +69,7 @@ export default function Player({
           })),
         error: (message) => onError(recording, message),
         diagnose,
-      });
+      }, modeRef.current);
     } catch (error) {
       diagnose("player.initialization_failed");
       onError(recording, "相机预览初始化失败：" + (error as Error).message);
@@ -61,6 +78,7 @@ export default function Player({
       playback.current?.dispose();
       playback.current = null;
       scene?.dispose();
+      sceneHandle.current = null;
     };
   }, [recording, onError, diagnose]);
   useEffect(() => {
@@ -69,16 +87,16 @@ export default function Player({
   useEffect(() => {
     if (focused === null) return;
     function restore(event: KeyboardEvent) {
-      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (event.key !== "Escape" || event.defaultPrevented || document.querySelector("dialog[open]")) return;
       event.preventDefault();
       setFocused(null);
-      focusButtons.current[focused!]?.focus();
+      focusButtons.current.get(focused!)?.focus();
     }
     window.addEventListener("keydown", restore);
     return () => window.removeEventListener("keydown", restore);
   }, [focused]);
-  const names = recording.cameras.map((camera) => camera.view_id),
-    columns = focused === null ? viewColumns(names.length) : 1;
+  const views = mode === "mesh" ? [null, ...recording.cameras] : recording.cameras,
+    columns = focused === null ? viewColumns(views.length) : 1;
   const gridStyle = {
     "--columns": columns,
     "--medium-columns": Math.min(3, columns),
@@ -91,47 +109,48 @@ export default function Player({
       data-frame={state.frame}
       data-busy={state.busy}
       data-playing={state.playing}
-      data-focused-view={focused === null ? "" : names[focused]}
+      data-focused-view={focused ?? ""}
+      data-display-mode={mode}
     >
       <div className="player-grid" ref={host} style={gridStyle}>
-        {names.map((name, i) => (
-          <div
-            className="player-tile"
-            key={name}
-            hidden={focused !== null && focused !== i}
-          >
-            <div className="tile-heading">
-              <span title={recording.cameras[i].camera_id}>
-                {name}
-              </span>
-              <div className="tile-actions">
-                {!recording.cameras[i].source_observed[state.frame] && (
-                  <span>缺帧</span>
-                )}
-                <button
-                  ref={(button) => { focusButtons.current[i] = button; }}
-                  className="icon-button"
-                  aria-label={focused === i ? "恢复宫格" : `放大 ${name}`}
-                  title={focused === i ? "恢复宫格 (Esc)" : `放大 ${name}`}
-                  aria-pressed={focused === i}
-                  onClick={() => setFocused(focused === i ? null : i)}
-                >
-                  {focused === i ? <Minimize2 /> : <Maximize2 />}
-                </button>
+        {views.map(camera => {
+          const name = camera?.view_id ?? MESH_VIEW;
+          return (
+            <div className="player-tile" key={name} hidden={focused !== null && focused !== name}>
+              <div className="tile-heading">
+                <span title={camera?.camera_id}>{name}</span>
+                <div className="tile-actions">
+                  {camera && !camera.source_observed[state.frame] && <span>缺帧</span>}
+                  <button
+                    ref={button => {
+                      if (button) focusButtons.current.set(name, button);
+                      else focusButtons.current.delete(name);
+                    }}
+                    className="icon-button"
+                    aria-label={focused === name ? "恢复宫格" : `放大 ${name}`}
+                    title={focused === name ? "恢复宫格 (Esc)" : `放大 ${name}`}
+                    aria-pressed={focused === name}
+                    onClick={() => setFocused(focused === name ? null : name)}
+                  >
+                    {focused === name ? <Minimize2 /> : <Maximize2 />}
+                  </button>
+                </div>
               </div>
+              <div
+                ref={node => {
+                  if (!camera) meshViewport.current = node;
+                  else if (node) tiles.current.set(name, node);
+                  else tiles.current.delete(name);
+                }}
+                className="player-viewport"
+                onDoubleClick={() => {
+                  setFocused(focused === name ? null : name);
+                  focusButtons.current.get(name)?.focus();
+                }}
+              />
             </div>
-            <div
-              ref={(node) => {
-                tiles.current[i] = node;
-              }}
-              className="player-viewport"
-              onDoubleClick={() => {
-                setFocused(focused === i ? null : i);
-                focusButtons.current[i]?.focus();
-              }}
-            />
-          </div>
-        ))}
+          );
+        })}
         {state.busy && (
           <div className="player-buffer" role="status">
             <LoaderCircle className="spin" />

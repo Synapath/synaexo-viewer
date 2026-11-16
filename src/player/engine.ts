@@ -1,4 +1,5 @@
 import type { MotionContract } from "./motion";
+export type BodyFrame = { joints: Float32Array; vertices?: Float32Array };
 export class ForwardEngine {
   private worker = new Worker(new URL("./forward.worker.ts", import.meta.url), {
     type: "module",
@@ -46,15 +47,15 @@ export class ForwardEngine {
     motion: ArrayBuffer,
     maps: ArrayBuffer[],
     contract: MotionContract,
-  ): Promise<{ jointParents: Int32Array; observed: boolean[][] }> {
+  ): Promise<{ jointParents: Int32Array; faces: Uint32Array; observed: boolean[][] }> {
     return this.call(
       { type: "init", model, motion, maps, contract },
       [model, motion, ...maps],
       120000,
     );
   }
-  frames(first: number, count: number): Promise<{ joints: Float32Array; computeMs: number }> {
-    return this.call({ type: "frames", first, count });
+  frames(first: number, count: number, mesh: boolean): Promise<BodyFrame & { computeMs: number }> {
+    return this.call({ type: "frames", first, count, mesh });
   }
   dispose(message = "人体计算线程已关闭") {
     if (this.closed) return;

@@ -13,7 +13,7 @@ const parsed = vi.hoisted(() => ({
 vi.mock("../smplx/npy", () => ({ parseNpz: vi.fn(async () => ({})) }));
 vi.mock("./preview", () => ({ readPreview: vi.fn(() => parsed) }));
 vi.mock("./engine", () => ({ ForwardEngine: class {
-  init = vi.fn(async () => ({ jointParents: new Int32Array([-1, 0, 1]), observed: [] }));
+  init = vi.fn(async () => ({ jointParents: new Int32Array([-1, 0, 1]), faces: new Uint32Array([0, 1, 2]), observed: [] }));
   dispose = vi.fn();
 } }));
 afterEach(() => vi.unstubAllGlobals());
@@ -40,6 +40,7 @@ test.each(["videos", "previews"])("opens a model-free %s ZIP through the built-i
   expect(archive.blob).not.toHaveBeenCalledWith("models/smplx.npz", expect.anything());
   expect(recording.cameras[0].view_id).toBe("EXO01");
   expect(recording.jointParents).toEqual(new Int32Array([-1, 0, 1]));
+  expect(recording.faces).toEqual(new Uint32Array([0, 1, 2]));
   recording.dispose();
   expect(recording.engine.dispose).toHaveBeenCalledOnce();
   expect(archive.close).toHaveBeenCalledOnce();

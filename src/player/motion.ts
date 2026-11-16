@@ -126,7 +126,7 @@ export function loadMotion(arrays: Record<string, NdArray>, contract: MotionCont
   };
   return {
     ...timeline,
-    frame(model: SmplxModel, index: number): Float32Array {
+    frame(model: SmplxModel, index: number, vertices?: Float32Array): Float32Array {
       if (!Number.isInteger(index) || index < 0 || index >= contract.frames) throw new Error("人体帧号超出范围");
       let poseParams: SmplxPose;
       if (rotations) {
@@ -144,12 +144,20 @@ export function loadMotion(arrays: Record<string, NdArray>, contract: MotionCont
           for (let i = 0; i < 90; i++) pose[75 + i] += model.handsMean[i];
         poseParams = { pose };
       }
-      const joints = model.forwardJoints({
+      const params = {
         ...poseParams,
         betas: Float32Array.from(slice("betas", index)),
         expression: contract.numExpression ? Float32Array.from(slice("expression", index)) : new Float32Array(),
-      }).slice();
+      };
       const t = slice("transl", index);
+      if (vertices) {
+        const posed = model.forward(params);
+        for (let i = 0; i < posed.length; i++) vertices[i] = posed[i] + t[i % 3];
+        if (!vertices.every(Number.isFinite)) throw new Error("人体网格包含无效坐标");
+      } else {
+        model.forwardJoints(params);
+      }
+      const joints = model.posedJoints.slice();
       for (let i = 0; i < joints.length; i++) joints[i] += t[i % 3];
       if (!joints.every(Number.isFinite)) throw new Error("人体前向包含无效坐标");
       return joints;
