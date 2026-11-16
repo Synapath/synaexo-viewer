@@ -5,12 +5,14 @@ import { parseNpz } from "../smplx/npy";
 import { readPreview } from "./preview";
 import { loadPlaybackModel, sha256Hex } from "./modelAssets";
 import type { DisplayUp } from "./orbitBasis";
+import { isExoProxy } from "./projection";
 
 export type Camera = {
   camera_id: string;
   view_id: string;
   kind: "gopro" | "ego";
   image_size: [number, number];
+  projectionK?: number[][];
   T_world_from_camera?: number[][] | number[][][];
   pose_valid?: boolean[];
   source_observed: boolean[];
@@ -255,6 +257,19 @@ async function prepareLegacyRecording(
         throw new Error("相机视频分辨率无效");
       if (!["baked_projection", "clean_proxy"].includes(c.content))
         throw new Error("视频必须明确标记为已有叠加或干净代理");
+      const [width, height] = c.image_size;
+      const calibration = c.calibration;
+      let projectionK: number[][] | undefined;
+      if (isExoProxy(c.kind, c.content) && calibration?.output_domain === "undistorted") {
+        if (!matrix(calibration.K, 3) || calibration.K[0][0] <= 0 || calibration.K[1][1] <= 0
+          || !Array.isArray(calibration.image_size) || calibration.image_size.length !== 2
+          || !calibration.image_size.every((n: unknown) => integer(n) && (n as number) > 0))
+          throw new Error(`EXO 代理视频内参或分辨率无效：${c.view_id}`);
+        const [w, h] = calibration.image_size;
+        projectionK = calibration.K.map((row: number[], i: number) =>
+          row.map(n => n * (i === 0 ? width / w : i === 1 ? height / h : 1)),
+        );
+      }
       const buffer = await read(c.video),
         url = URL.createObjectURL(new Blob([buffer], { type: "video/mp4" }));
       urls.push(url);
@@ -263,7 +278,8 @@ async function prepareLegacyRecording(
         camera_id: c.camera_id,
         view_id: c.view_id,
         kind: c.kind,
-        image_size: [c.image_size[0], c.image_size[1]],
+        image_size: [width, height],
+        projectionK,
         T_world_from_camera: pose(c.T_world_from_camera, p.frames),
         pose_valid: booleans(c.pose_valid, p.frames, c.view_id),
         source_observed: [],

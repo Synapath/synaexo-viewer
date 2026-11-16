@@ -1,7 +1,28 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import type { Recording } from "./package";
+import type { Camera, Recording } from "./package";
 import { explicitOrbitDirection } from "./orbitBasis";
+
+function cameraPose(camera: Camera | undefined, frame: number) {
+  const poses = camera?.T_world_from_camera;
+  if (!poses) return;
+  return typeof poses[0][0] === "number" ? poses as number[][] : (poses as number[][][])[frame];
+}
+
+function createProjectionCamera({ image_size: [w, h], projectionK: K }: Camera) {
+  if (!K) return;
+  const n = 0.01, f = 1000;
+  const camera = new THREE.PerspectiveCamera();
+  camera.matrixAutoUpdate = false;
+  camera.projectionMatrix.set(
+    2 * K[0][0] / w, -2 * K[0][1] / w, 1 - 2 * K[0][2] / w, 0,
+    0, 2 * K[1][1] / h, 2 * K[1][2] / h - 1, 0,
+    0, 0, -(f + n) / (f - n), -2 * f * n / (f - n),
+    0, 0, -1, 0,
+  );
+  camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
+  return camera;
+}
 
 export function createScene(
   host: HTMLElement,
@@ -26,6 +47,9 @@ export function createScene(
     depthWrite: true,
     roughness: 0.8,
   });
+  const overlayMaterial = material.clone();
+  overlayMaterial.transparent = true;
+  overlayMaterial.opacity = 0.5;
   const scene = new THREE.Scene(),
     mesh = new THREE.Mesh(geometry, material);
   mesh.frustumCulled = false;
@@ -46,11 +70,7 @@ export function createScene(
   const initialView = descriptor.cameras.find(
     (camera) => camera.T_world_from_camera && camera.pose_valid?.[initialFrame],
   );
-  const initialRows = initialView?.T_world_from_camera
-    ? typeof initialView.T_world_from_camera[0][0] === "number"
-      ? (initialView.T_world_from_camera as number[][])
-      : (initialView.T_world_from_camera as number[][][])[initialFrame]
-    : null;
+  const initialRows = cameraPose(initialView, initialFrame);
   // OrbitControls caches its up basis at construction. Freeze the viewing basis first.
   if (descriptor.display_up)
     orbitCamera.up.set(...descriptor.display_up);
@@ -81,6 +101,8 @@ export function createScene(
     return background;
   });
   const ortho = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  const projectors = descriptor.cameras.map(createProjectionCamera);
+  const cameraAxes = new THREE.Matrix4().makeScale(1, -1, -1);
   const axes = new THREE.AxesHelper(0.5);
   scene.add(axes);
   let current = -1,
@@ -114,12 +136,33 @@ export function createScene(
       if (!index) {
         orbitCamera.aspect = width / height;
         orbitCamera.updateProjectionMatrix();
+        mesh.material = material;
         mesh.visible = descriptor.body_observed[current];
+        axes.visible = true;
         renderer.render(scene, orbitCamera);
         return;
       }
-      if (descriptor.cameras[index - 1].source_observed[current])
-        renderer.render(backgrounds[index - 1], ortho);
+      const config = descriptor.cameras[index - 1];
+      if (!config.source_observed[current]) return;
+      renderer.render(backgrounds[index - 1], ortho);
+      const projector = projectors[index - 1];
+      if (!projector || !descriptor.body_observed[current] || !config.pose_valid?.[current]) return;
+      const rows = cameraPose(config, current);
+      if (!rows) return;
+      projector.matrix.set(
+        rows[0][0], rows[0][1], rows[0][2], rows[0][3],
+        rows[1][0], rows[1][1], rows[1][2], rows[1][3],
+        rows[2][0], rows[2][1], rows[2][2], rows[2][3],
+        rows[3][0], rows[3][1], rows[3][2], rows[3][3],
+      ).multiply(cameraAxes);
+      projector.matrixWorldNeedsUpdate = true;
+      renderer.clearDepth();
+      mesh.material = overlayMaterial;
+      mesh.visible = true;
+      axes.visible = false;
+      renderer.autoClear = false;
+      renderer.render(scene, projector);
+      renderer.autoClear = true;
     });
   }
   function resize() {
@@ -195,6 +238,7 @@ export function createScene(
       );
       geometry.dispose();
       material.dispose();
+      overlayMaterial.dispose();
       axes.geometry.dispose();
       (axes.material as THREE.Material).dispose();
       renderer.dispose();

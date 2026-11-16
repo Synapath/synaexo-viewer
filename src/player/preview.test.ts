@@ -115,10 +115,34 @@ test("reads zero-expression matrices and both MP4 types without projection data"
   const parsed = readPreview(arrays);
   expect(parsed.contract).toMatchObject({ representation, numExpression: 0 });
   expect(parsed.displayUp).toEqual([-1, 0, 0]);
+  expect(parsed.cameras.every(camera => !camera.projectionK)).toBe(true);
   expect(parsed.cameras.map(v => [v.path, v.video_pts_ns, v.source_observed])).toEqual([
     ["videos/exo01.mp4", [0, 33_333_333], [false, true]],
     ["videos/ego01.mp4", [0, 33_333_333], [true, false]],
   ]);
   update({ representation: "unsupported" });
   expect(() => readPreview(arrays)).toThrow("动作表示不支持");
+});
+
+test("uses native-pixel calibration only for EXO proxy videos", () => {
+  const { arrays, metadata, update } = preview();
+  const pose = [1, 0, 0, 0.125, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+  for (let i = 0; i < 2; i++) {
+    Object.assign(metadata.videos[i], { content: "clean_proxy" });
+    arrays[`preview_camera_${i}_K`] = array([3, 3], new Float64Array([30.123456789, 0, 32, 0, 30, 32, 0, 0, 1]));
+    arrays[`preview_camera_${i}_poses`] = array([2, 4, 4], new Float64Array([...pose, ...pose]));
+    arrays[`preview_camera_${i}_pose_valid`] = array([2], new Int32Array([true, false].map(Number)));
+  }
+  update();
+  const [exo, ego] = readPreview(arrays).cameras;
+  expect(exo.projectionK?.[0][0]).toBe(30.123456789);
+  expect(exo.T_world_from_camera?.[0]).toEqual([[1, 0, 0, 0.125], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]);
+  expect(exo.pose_valid).toEqual([true, false]);
+  expect(ego.projectionK).toBeUndefined();
+
+  arrays.preview_camera_0_K.data[0] = 0;
+  expect(() => readPreview(arrays)).toThrow("EXO 代理视频内参无效");
+  Object.assign(metadata.videos[0], { content: "baked_projection" });
+  update();
+  expect(readPreview(arrays).cameras[0].projectionK).toBeUndefined();
 });

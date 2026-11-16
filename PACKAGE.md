@@ -143,7 +143,7 @@ synaexo-delivery-<内容摘要>/                    # 整套文件路径与摘�
 
 主时间轴和视频 PTS 必须精确、严格递增，并在解析器允许的容器时间基误差内一致。人体部分缺失时需要逐帧 mask；仅在来源明确声明全帧有效时才能由总数生成全有效 mask。缺失观测不会当作有效数据，源 `physical_accuracy_passed` 状态保持不变。
 
-Worker 由动作参数生成独立三维人体。`clean_proxy`、`baked_projection` 和省略视频类型的旧包均直接显示包内 MP4。Viewer 不实时向视频投影人体，回放不依赖动作 NPZ 中的相机投影数组。
+Worker 由动作参数生成三维人体。EXO `clean_proxy` 使用 `preview_camera_<i>_K[3,3]`（代理视频像素内参）、`preview_camera_<i>_poses[N,4,4]`（相机到世界变换）和 `preview_camera_<i>_pose_valid[N]` 叠加半透明白色人体。仅在人体、视频来源、相机位姿均有效的帧叠加。缺少投影数组的 EXO、已烘焙视频、省略视频类型的旧包及 EGO 直接显示包内 MP4。
 
 ## 包内模型
 
@@ -167,4 +167,4 @@ ZIP 缺少模型时，Viewer 读取与页面同目录发布的 `models/default.j
 
 真实 ZIP、模型和凭据保持在仓库之外。报告可用于核对单次打包的来源和摘要，不是可视化 ZIP 的必需文件。
 
-页面继续支持自带模型的 `synaexo-viewer-package` 旧清单包及其 `previews/` 视频；新脚本生成本文的 README、models、motions、videos 结构。旧清单包的 `clean_proxy` 分支仍要求视频已去畸变且具备相应标定。源质检字段保留在交付数据中，Viewer 不展示质检状态。
+页面继续支持自带模型的 `synaexo-viewer-package` 旧清单包及其 `previews/` 视频；新脚本生成本文的 README、models、motions、videos 结构。旧清单包仅为标定声明已去畸变的 EXO `clean_proxy` 视频叠加人体。源质检字段保留在交付数据中，Viewer 不展示质检状态。
