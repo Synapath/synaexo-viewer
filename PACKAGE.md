@@ -139,11 +139,11 @@ synaexo-delivery-<内容摘要>/                    # 整套文件路径与摘�
 | `preview_video_pts_ns` | `[V,N]` 各路 MP4 的相对纳秒 PTS |
 | `preview_source_observed` | `[V,N]` 各路视频逐帧来源有效性 |
 
-`preview_metadata.display_up` 是 Mesh 模式独立三维视角的可选向上轴，由来源证据换算到动作坐标系，以三个有限且不全为零的数字表示。
+`preview_metadata.display_up` 是可选的三维向上轴，由来源证据换算到动作坐标系，以三个有限且不全为零的数字表示。
 
 主时间轴和视频 PTS 必须精确、严格递增，并在解析器允许的容器时间基误差内一致。人体部分缺失时需要逐帧 mask；仅在来源明确声明全帧有效时才能由总数生成全有效 mask。缺失观测不会当作有效数据，源 `physical_accuracy_passed` 状态保持不变。
 
-骨架模式下，Worker 由动作参数解算 55 个 SMPL-X 关节点，Viewer 按模型的关节层级连线。Mesh 模式另外计算网格顶点，并显示独立三维视角。两种模式都用 EXO 和 EGO 的 `clean_proxy` 所带的 `preview_camera_<i>_K[3,3]`（代理视频像素内参）、`preview_camera_<i>_poses[N,4,4]`（相机到世界变换）和 `preview_camera_<i>_pose_valid[N]` 进行投影，仅在人体、视频来源、相机位姿均有效的帧叠加。缺少投影数组、已烘焙或省略视频类型的视频直接显示包内 MP4。
+Worker 由动作参数解算 55 个 SMPL-X 关节点，Viewer 按模型的关节层级连线。EXO 和 EGO 的投影使用 `clean_proxy` 所带的 `preview_camera_<i>_K[3,3]`（代理视频像素内参）、`preview_camera_<i>_poses[N,4,4]`（相机到世界变换）和 `preview_camera_<i>_pose_valid[N]`，仅在人体、视频来源、相机位姿均有效的帧叠加。缺少投影数组、已烘焙或省略视频类型的视频直接显示包内 MP4。
 
 ## 包内模型
 

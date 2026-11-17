@@ -12,7 +12,6 @@ import {
   FileArchive,
   FolderOpen,
   LoaderCircle,
-  Settings,
   X,
 } from "lucide-react";
 import { openArchive, type RecordingArchive } from "./lib/archive";
@@ -32,17 +31,16 @@ export default function App() {
     [loading, setLoading] = useState(""),
     [dragging, setDragging] = useState(false);
   const input = useRef<HTMLInputElement>(null),
-    settings = useRef<HTMLDialogElement>(null),
     pending = useRef<AbortController | null>(null),
     current = useRef<Recording | null>(null),
     dragDepth = useRef(0);
   useEffect(() => {
     function changeDisplayMode(event: KeyboardEvent) {
-      if (event.defaultPrevented || event.repeat || event.isComposing
+      if (event.defaultPrevented || event.repeat || event.isComposing || !event.shiftKey
         || event.altKey || event.ctrlKey || event.metaKey || event.key.toLowerCase() !== "i") return;
       const target = event.target;
       if (target instanceof HTMLElement && (target.isContentEditable
-        || target.matches("textarea, select, input:not([type=range]):not([type=radio])"))) return;
+        || target.matches("textarea, select, input:not([type=range])"))) return;
       event.preventDefault();
       setDisplayMode(mode => mode === "skeleton" ? "mesh" : "skeleton");
     }
@@ -172,10 +170,6 @@ export default function App() {
           </span>
         </a>
         <div className="header-actions">
-          <button className="icon-button" aria-label="设置" title="设置" aria-haspopup="dialog"
-            onClick={() => settings.current?.showModal()}>
-            <Settings />
-          </button>
           <button className="icon-button" aria-label="下载日志" title="下载日志" onClick={diagnostics.download}>
             <Download />
           </button>
@@ -195,30 +189,6 @@ export default function App() {
           </button>
         </div>
       </header>
-      <dialog ref={settings} className="settings-dialog" aria-labelledby="settings-title">
-        <div className="settings-heading">
-          <h2 id="settings-title">设置</h2>
-          <button className="icon-button" aria-label="关闭设置" title="关闭设置" onClick={() => settings.current?.close()}>
-            <X />
-          </button>
-        </div>
-        <fieldset>
-          <legend>显示模式</legend>
-          <div className="settings-modes">
-            <label>
-              <input type="radio" name="display-mode" checked={displayMode === "skeleton"}
-                onChange={() => setDisplayMode("skeleton")} />
-              骨架
-            </label>
-            <label>
-              <input type="radio" name="display-mode" checked={displayMode === "mesh"}
-                onChange={() => setDisplayMode("mesh")} />
-              Mesh
-            </label>
-          </div>
-        </fieldset>
-        <p><kbd>I</kbd> 切换显示模式</p>
-      </dialog>
       <input
         ref={input}
         type="file"
