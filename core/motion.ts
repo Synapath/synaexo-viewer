@@ -105,7 +105,7 @@ export function loadMotion(arrays: Record<string, NdArray>, contract: MotionCont
   };
   return {
     ...timeline,
-    frame(model: SmplxModel, index: number) {
+    frame(model: SmplxModel, index: number, joints?: Float32Array) {
       if (!Number.isInteger(index) || index < 0 || index >= contract.frames) throw new Error("人体帧号超出范围");
       const pose = new Float32Array(165);
       if (!matrix) {
@@ -121,6 +121,9 @@ export function loadMotion(arrays: Record<string, NdArray>, contract: MotionCont
         expression: contract.numExpression ? Float32Array.from(slice("expression", index)) : new Float32Array(),
       }, { poseBlendShapes: true }).slice(), t = slice("transl", index);
       for (let i = 0; i < positions.length; i++) positions[i] += t[i % 3];
+      if (joints) {
+        for (let i = 0; i < joints.length; i++) joints[i] = model.posedJoints[i] + t[i % 3];
+      }
       if (!positions.every(Number.isFinite)) throw new Error("人体前向包含无效坐标");
       return positions;
     },

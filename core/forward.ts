@@ -2,6 +2,8 @@ import { parseNpz } from "./npy";
 import { SmplxModel } from "./smplxModel";
 import { loadMotion, mask, readTimeline, type MotionContract } from "./motion";
 
+export type BodyFrames = { vertices: Float32Array; joints: Float32Array };
+
 export async function createForward(modelBuffer: ArrayBuffer, motionBuffer: ArrayBuffer, maps: ArrayBuffer[], c: MotionContract) {
   const arrays = await parseNpz(
     new Uint8Array(modelBuffer),
@@ -86,16 +88,23 @@ export async function createForward(modelBuffer: ArrayBuffer, motionBuffer: Arra
   const data = motionArrays;
   const body = data.body_observed ? mask(data, "body_observed", [c.frames]) : undefined;
   const handAccepted = data.hand_accepted ? mask(data, "hand_accepted", [c.frames, 2]) : undefined;
+  function bodyFrames(first: number, count: number): BodyFrames {
+    if (!Number.isInteger(first) || !Number.isInteger(count) || first < 0 || count < 1 || count > 8 || first + count > c.frames)
+      throw new Error("人体帧请求无效");
+    const stride = model.parents.length * 3;
+    const joints = new Float32Array(count * stride);
+    const vertices = new Float32Array(count * 10475 * 3);
+    for (let i = 0; i < count; i++) {
+      const pose = joints.subarray(i * stride, (i + 1) * stride);
+      vertices.set(motion.frame(model, first + i, pose), i * 10475 * 3);
+    }
+    return { vertices, joints };
+  }
   return {
-    faces: model.faces.slice(), observed, body, handAccepted,
+    faces: model.faces.slice(), parents: model.parents.slice(), observed, body, handAccepted,
     times: motion.times, referenceOrigin: motion.referenceOrigin,
-    frames(first: number, count: number) {
-      if (!Number.isInteger(first) || !Number.isInteger(count) || first < 0 || count < 1 || count > 8 || first + count > c.frames)
-        throw new Error("人体帧请求无效");
-      const vertices = new Float32Array(count * 10475 * 3);
-      for (let i = 0; i < count; i++) vertices.set(motion.frame(model, first + i), i * 10475 * 3);
-      return vertices;
-    },
+    bodyFrames,
+    frames(first: number, count: number) { return bodyFrames(first, count).vertices; },
   };
 }
-export type ForwardReady = Omit<Awaited<ReturnType<typeof createForward>>, "frames">;
+export type ForwardReady = Omit<Awaited<ReturnType<typeof createForward>>, "frames" | "bodyFrames">;

@@ -72,10 +72,12 @@ test("full forward preserves shape, pose corrective, root rotation and world tra
   );
   const { arrays, contract } = clip(),
     motion = loadMotion(arrays, contract),
-    point = motion.frame(model, 0).slice(3, 6);
+    joints = new Float32Array(55 * 3),
+    point = motion.frame(model, 0, joints).slice(3, 6);
   expect(point[0]).toBeCloseTo(3, 5);
   expect(point[1]).toBeCloseTo(7, 5);
   expect(point[2]).toBeCloseTo(4, 5);
+  expect([...joints.slice(0, 3)]).toEqual([5, 6, 7]);
 });
 test("rejects time or coordinate evidence mismatches instead of assuming an FPS or a frame", () => {
   const { arrays, contract } = clip();

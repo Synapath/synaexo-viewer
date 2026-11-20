@@ -1,4 +1,4 @@
-import type { ForwardReady } from "./forward";
+import type { BodyFrames, ForwardReady } from "./forward";
 import type { MotionContract } from "./motion";
 export class ForwardEngine {
   private worker = new Worker(new URL("./forward.worker.ts", import.meta.url), {
@@ -55,7 +55,11 @@ export class ForwardEngine {
     );
   }
   async frames(first: number, count: number): Promise<Float32Array> {
-    return (await this.call({ type: "frames", first, count })).vertices;
+    return (await this.bodyFrames(first, count)).vertices;
+  }
+  async bodyFrames(first: number, count: number): Promise<BodyFrames> {
+    const { vertices, joints } = await this.call({ type: "frames", first, count });
+    return { vertices, joints };
   }
   dispose(message = "人体计算线程已关闭") {
     if (this.closed) return;
