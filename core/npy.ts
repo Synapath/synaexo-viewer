@@ -82,7 +82,7 @@ export function parseNpy(bytes: Uint8Array, preserveClock = false): NdArray {
     if (
       !(
         (kind === "f" && [4, 8].includes(width)) ||
-        (["i", "u"].includes(kind) && [1, 4, 8].includes(width)) ||
+        (["i", "u"].includes(kind) && [1, 2, 4, 8].includes(width)) ||
         (kind === "b" && width === 1)
       )
     )
@@ -119,9 +119,13 @@ export function parseNpy(bytes: Uint8Array, preserveClock = false): NdArray {
             ? kind === "i"
               ? dataView.getInt8(at)
               : dataView.getUint8(at)
-            : kind === "u"
-              ? dataView.getUint32(at, little)
-              : dataView.getInt32(at, little);
+            : width === 2
+              ? kind === "u"
+                ? dataView.getUint16(at, little)
+                : dataView.getInt16(at, little)
+              : kind === "u"
+                ? dataView.getUint32(at, little)
+                : dataView.getInt32(at, little);
       data[i] = n;
     }
   }
