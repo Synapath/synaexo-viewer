@@ -24,7 +24,7 @@ import "./App.css";
 
 export default function App() {
   const [diagnostics] = useState(createDiagnostics);
-  const [displayMode, setDisplayMode] = useState<DisplayMode>("skeleton");
+  const [displayMode, setDisplayMode] = useState<DisplayMode>("mesh");
   const [recording, setRecording] = useState<Recording | null>(null),
     [generation, setGeneration] = useState(0);
   const [error, setError] = useState(""),
@@ -42,7 +42,7 @@ export default function App() {
       if (target instanceof HTMLElement && (target.isContentEditable
         || target.matches("textarea, select, input:not([type=range])"))) return;
       event.preventDefault();
-      setDisplayMode(mode => mode === "skeleton" ? "mesh" : "skeleton");
+      setDisplayMode(mode => mode === "mesh" ? "skeleton" : "mesh");
     }
     window.addEventListener("keydown", changeDisplayMode);
     return () => window.removeEventListener("keydown", changeDisplayMode);

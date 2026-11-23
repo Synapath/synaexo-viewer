@@ -167,4 +167,4 @@ ZIP 缺少模型时，Viewer 读取与页面同目录发布的 `models/default.j
 
 真实 ZIP、模型和凭据保持在仓库之外。报告可用于核对单次打包的来源和摘要，不是可视化 ZIP 的必需文件。
 
-页面继续支持自带模型的 `synaexo-viewer-package` 旧清单包及其 `previews/` 视频；新脚本生成本文的 README、models、motions、videos 结构。旧清单包仅为标定声明已去畸变的 `clean_proxy` 视频叠加关节点和骨架连线。源质检字段保留在交付数据中，Viewer 不展示质检状态。
+页面继续支持自带模型的 `synaexo-viewer-package` 旧清单包及其 `previews/` 视频。新脚本生成本文的 README、models、motions、videos 结构。旧清单包的投影叠加适用于标定声明已去畸变的 `clean_proxy` 视频。源质检字段保留在交付数据中，Viewer 不展示质检状态。

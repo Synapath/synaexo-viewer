@@ -4,7 +4,7 @@
 
 <h1 align="center">SynaExo Viewer</h1>
 
-<p align="center">叠加 SMPL-X 骨架的 EXO／EGO 多视角视频本地回放</p>
+<p align="center">EXO／EGO 多视角视频与 SMPL-X 本地回放</p>
 
 <p align="center">
   <a href="https://github.com/Synapath/synaexo-viewer/actions/workflows/pages.yml"><img src="https://github.com/Synapath/synaexo-viewer/actions/workflows/pages.yml/badge.svg" alt="检查与发布" /></a>
@@ -35,7 +35,7 @@ SynaExo Viewer 是独立的静态回放页面。拖入一个 ZIP 录制包，即
 
 播放卡住时，点击右上角的「下载日志」图标。JSON 包含本页最近的跳转、Worker 耗时、视频状态和缓存统计，可与问题描述一起提供。
 
-带标定的 EXO 和 EGO 代理视频叠加 SMPL-X 关节点和骨架连线。Viewer 支持平台导出的矩阵参数和旧轴角包，格式与时间要求见 [可视化包](PACKAGE.md#动作-npz-与播放信息)。
+Viewer 默认显示独立的 SMPL-X 网格视角，并在带标定的 EXO 和 EGO 代理视频上叠加人体网格。支持平台导出的矩阵参数和旧轴角包，格式与时间要求见 [可视化包](PACKAGE.md#动作-npz-与播放信息)。
 
 需要从 SynaExo 已发布的 S3 结果准备录制包时，使用 [打包脚本](PACKAGE.md#打包脚本)。Python 和对象存储凭据仅在打包端准备；包内已附本次回放所需的模型。
 
@@ -67,7 +67,7 @@ npm run build
 | 路径 | 内容 |
 | --- | --- |
 | [`src/App.tsx`](src/App.tsx) | 录制包导入、切换与关闭 |
-| [`src/player`](src/player) | 相机视图、骨架投影、同步播放与计算 Worker |
+| [`src/player`](src/player) | 相机视图、人体投影、同步播放与计算 Worker |
 | [`src/smplx`](src/smplx) | SMPL-X 前向与 NPY／NPZ 解析 |
 | [`src/lib/archive.ts`](src/lib/archive.ts) | ZIP 按条目读取与 CRC 校验 |
 | [`tools/package_recording.py`](tools/package_recording.py) | 从已发布结果生成录制包 |
