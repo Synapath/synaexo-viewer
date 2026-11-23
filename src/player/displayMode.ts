@@ -1,1 +1,1 @@
-export type DisplayMode = "skeleton" | "mesh";
+export type DisplayMode = "mesh" | "skeleton";
