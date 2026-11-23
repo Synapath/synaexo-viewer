@@ -8,10 +8,12 @@ import {
 } from "react";
 import {
   ArrowLeft,
+  Box,
   Download,
   FileArchive,
   FolderOpen,
   LoaderCircle,
+  Waypoints,
   X,
 } from "lucide-react";
 import { openArchive, type RecordingArchive } from "./lib/archive";
@@ -34,6 +36,9 @@ export default function App() {
     pending = useRef<AbortController | null>(null),
     current = useRef<Recording | null>(null),
     dragDepth = useRef(0);
+  const toggleDisplayMode = useCallback(() => {
+    setDisplayMode(mode => mode === "mesh" ? "skeleton" : "mesh");
+  }, []);
   useEffect(() => {
     function changeDisplayMode(event: KeyboardEvent) {
       if (event.defaultPrevented || event.repeat || event.isComposing || !event.shiftKey
@@ -42,11 +47,11 @@ export default function App() {
       if (target instanceof HTMLElement && (target.isContentEditable
         || target.matches("textarea, select, input:not([type=range])"))) return;
       event.preventDefault();
-      setDisplayMode(mode => mode === "mesh" ? "skeleton" : "mesh");
+      toggleDisplayMode();
     }
     window.addEventListener("keydown", changeDisplayMode);
     return () => window.removeEventListener("keydown", changeDisplayMode);
-  }, []);
+  }, [toggleDisplayMode]);
   useEffect(
     () => () => {
       pending.current?.abort();
@@ -170,6 +175,17 @@ export default function App() {
           </span>
         </a>
         <div className="header-actions">
+          {recording && (
+            <button
+              onClick={toggleDisplayMode}
+              aria-label={displayMode === "mesh" ? "切换为关键点" : "切换为 Mesh"}
+              title={displayMode === "mesh" ? "切换为关键点 (Shift+I)" : "切换为 Mesh (Shift+I)"}
+              aria-keyshortcuts="Shift+I"
+            >
+              {displayMode === "mesh" ? <Waypoints /> : <Box />}
+              {displayMode === "mesh" ? "关键点" : "Mesh"}
+            </button>
+          )}
           <button className="icon-button" aria-label="下载日志" title="下载日志" onClick={diagnostics.download}>
             <Download />
           </button>
