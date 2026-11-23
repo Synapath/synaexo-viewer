@@ -16,6 +16,9 @@
   --muted: #929292;
   --surface: #181818;
   --radius: 12px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --app-header-height: 64px;
 }
 * {
   box-sizing: border-box;
