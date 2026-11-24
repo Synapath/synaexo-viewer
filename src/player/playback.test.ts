@@ -122,6 +122,22 @@ test("pausing during a slow body batch preserves its next aligned picture for re
   fixture.player.dispose();
 });
 
+test("a late fast-camera callback preserves the synchronized picture awaiting its body",async () => {
+  const fixture = setup(250,2,[3840,2160]);
+  fixture.present(0);await vi.advanceTimersByTimeAsync(251);fixture.player.toggle();
+  fixture.present(7);
+  fixture.decode(0,8);fixture.decode(0,9);fixture.decode(1,8);
+  expect(fixture.output.update.mock.calls.at(-1)).toEqual([7,true,true]);
+  fixture.decode(0,10);
+  await vi.advanceTimersByTimeAsync(251);
+  expect(fixture.output.present.mock.calls.at(-1)?.[1]).toBe(8);
+  expect(fixture.output.update.mock.calls.at(-1)).toEqual([8,false,true]);
+  fixture.decode(1,10);
+  expect(fixture.output.present.mock.calls.at(-1)?.[1]).toBe(10);
+  fixture.player.dispose();
+  expect(fixture.canvases.every(canvas => canvas.width===0&&canvas.height===0)).toBe(true);
+});
+
 test.each(["pause","toggle"] as const)("%s realigns uneven decoders before releasing ahead pictures",async command => {
   const fixture = setup(0,2,[3840,2160]);
   fixture.present(0);await vi.advanceTimersByTimeAsync(1);fixture.player.toggle();
