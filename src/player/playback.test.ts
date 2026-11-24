@@ -41,7 +41,10 @@ function setup(computeMs = 0, cameraCount = 2, imageSize = [64,32]) {
   } as unknown as Recording;
   const output = {present:vi.fn(),update:vi.fn(),error:vi.fn(),diagnose:vi.fn()};
   const player = startPlayback(descriptor,{append(){}} as unknown as HTMLElement,output,"mesh");
-  const decode = (camera:number,frame:number) => videos[camera].callback!(0,{mediaTime:frame/30} as VideoFrameCallbackMetadata);
+  const decode = (camera:number,frame:number) => {
+    videos[camera].currentTime = frame/30;
+    videos[camera].callback!(0,{mediaTime:frame/30} as VideoFrameCallbackMetadata);
+  };
   const present = (frame:number) => videos.forEach((_,i) => decode(i,frame));
   return {player,frames,output,videos,canvases,decode,present};
 }
@@ -116,6 +119,19 @@ test("pausing during a slow body batch preserves its next aligned picture for re
   await vi.advanceTimersByTimeAsync(251);
   fixture.player.toggle();await vi.advanceTimersByTimeAsync(1);
   expect(fixture.output.present.mock.calls.at(-1)?.[1]).toBe(9);
+  fixture.player.dispose();
+});
+
+test.each(["pause","toggle"] as const)("%s realigns uneven decoders before releasing ahead pictures",async command => {
+  const fixture = setup(0,2,[3840,2160]);
+  fixture.present(0);await vi.advanceTimersByTimeAsync(1);fixture.player.toggle();
+  fixture.decode(0,1);fixture.decode(0,2);
+  fixture.player[command]();
+  expect(fixture.videos.every(video => video.currentTime>=0&&video.currentTime<1/30)).toBe(true);
+  fixture.player.toggle();await vi.advanceTimersByTimeAsync(1);
+  for (let frame=1;frame<=2;frame++) fixture.present(frame);
+  expect(fixture.output.present.mock.calls.at(-1)?.[1]).toBe(2);
+  expect(fixture.videos.every(video => !video.paused)).toBe(true);
   fixture.player.dispose();
 });
 

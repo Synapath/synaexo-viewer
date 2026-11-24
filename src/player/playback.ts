@@ -86,6 +86,9 @@ export function startPlayback(
     images.forEach((cache, i) => {
       for (const [ordinal, image] of cache)
         if (ordinal !== target) dropCachedImage(i, ordinal, image);
+      // Rewind with cache eviction so each decoder resumes from the retained picture.
+      const video = videos[i];
+      video.currentTime = seekSeconds(descriptor.cameras[i].video_pts_ns, target, video.duration);
     });
     pruneBodies();
   }
