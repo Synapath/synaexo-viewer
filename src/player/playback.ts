@@ -128,7 +128,7 @@ export function startPlayback(
   function pruneImages(i: number, oldest: number) {
     const cache = images[i];
     for (const [ordinal, image] of cache)
-      if (ordinal < oldest || cache.size > imageCacheFrames) dropCachedImage(i, ordinal, image);
+      if (ordinal !== pendingFrame && (ordinal < oldest || cache.size > imageCacheFrames)) dropCachedImage(i, ordinal, image);
   }
   const fail = (error: unknown, stage: string) => {
     if (!disposed && !failed) {
